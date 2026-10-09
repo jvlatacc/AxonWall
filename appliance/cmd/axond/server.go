@@ -31,6 +31,20 @@ type Applier interface {
 	Apply(cfg *config.Config) error
 }
 
+// ConfirmRegistrar is implemented by appliers that own a confirm-or-rollback
+// timer: after a successful store commit the server arms it, so an
+// unconfirmed change rolls back — kernel ruleset restored, previous store
+// revision re-committed — unless the operator confirms in the window.
+type ConfirmRegistrar interface {
+	ArmRollback(prevCfg *config.Config, prevRev string)
+}
+
+// Confirmer is implemented by appliers with a pending confirmation window;
+// POST /confirm lands the operator's confirmation.
+type Confirmer interface {
+	Confirm() bool
+}
+
 // Server is the axond REST API.
 type Server struct {
 	store   Store
@@ -75,6 +89,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /config", s.auth(s.handlePutConfig))
 	mux.HandleFunc("GET /backup/export", s.auth(s.handleBackupExport))
 	mux.HandleFunc("POST /backup/restore", s.auth(s.handleBackupRestore))
+	mux.HandleFunc("POST /confirm", s.auth(s.handleConfirm))
 	return mux
 }
 
@@ -144,6 +159,14 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Snapshot the current revision for the confirm-or-rollback timer: an
+	// unconfirmed change reverts to exactly this content and revision.
+	prevCfg, prevRev, err := s.store.Load()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
 	tx, err := s.store.Begin()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
@@ -194,6 +217,13 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok = true
+
+	// The change is committed and live: arm the confirm-or-rollback timer.
+	// Until the operator confirms (POST /confirm), the timer restores the
+	// previous ruleset and appends a rollback commit to the store.
+	if reg, isReg := s.applier.(ConfirmRegistrar); isReg {
+		reg.ArmRollback(prevCfg, prevRev)
+	}
 
 	w.Header().Set("X-AxonWall-Revision", newRev)
 	writeJSON(w, http.StatusOK, map[string]any{"revision": newRev})
@@ -270,6 +300,19 @@ func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 // A backup archive is a config file, a manifest, and the store's git
 // history — generous for wave 1.
 const maxBackupBytes = 64 << 20
+
+// handleConfirm confirms the pending config change, canceling its rollback
+// timer. It is a no-op with a conflict status when no window is open.
+func (s *Server) handleConfirm(w http.ResponseWriter, _ *http.Request) {
+	c, ok := s.applier.(Confirmer)
+	if !ok || !c.Confirm() {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "no apply is pending confirmation",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"confirmed": true})
+}
 
 const maxConfigBytes = 1 << 20 // 1 MiB is generous for wave-1 configs
 
