@@ -1,0 +1,32 @@
+# AxonWall wave-1 configuration — the spec's sample config.
+# The spec's "PEER_PUBKEY" placeholder is replaced with a well-formed
+# (base64, 32-byte) key so the document passes validation.
+version: 1
+zones:
+  wan: { interfaces: [wan0] }
+  lan: { interfaces: [lan0] }
+  wg0: { interfaces: [wg0] }
+interfaces:
+  - { name: wan0, match: enp1s0, addressing: dhcp }
+  - { name: lan0, match: enp2s0, address: [192.168.1.1/24] }
+services:
+  dns:
+    resolver: unbound
+    listen: [lan, wg0]
+  dhcp:
+    pools:
+      - { zone: lan, range: [192.168.1.100, 192.168.1.199], gateway: 192.168.1.1, dns: 192.168.1.1 }
+  wireguard:
+    listen-port: 51820
+    peers:
+      - { name: laptop, public-key: QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=, allowed-ips: [10.10.0.2/32] }
+firewall:
+  default: { input: drop, forward: drop, output: accept }
+  aliases:
+    admin-hosts: { type: ipv4, entries: [192.168.1.10, 192.168.1.11] }
+  nat:
+    - { name: lan-masq, out: wan0, source: lan, mode: masquerade }
+  rules:
+    - { name: lan-to-wan, from: lan, to: wan, verdict: accept }
+    - { name: admin-ssh, from: lan, to: firewall, service: ssh, source-alias: admin-hosts, verdict: accept }
+    - { name: wg-handshake, from: wan, to: firewall, service: udp/51820, verdict: accept }
