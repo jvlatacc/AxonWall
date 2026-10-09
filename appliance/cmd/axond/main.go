@@ -81,6 +81,7 @@ func main() {
 			log.Fatalf("axond: apply committed config at boot: %v", err)
 		}
 		log.Printf("axond: firewall active (rendered from the committed config)")
+		emitFirewallActiveMarker()
 	} else {
 		log.Printf("axond: --skip-apply set: firewall NOT applied (development only)")
 	}
