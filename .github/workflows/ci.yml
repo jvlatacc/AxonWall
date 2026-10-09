@@ -76,3 +76,50 @@ jobs:
             dist/el-torito-report.txt
           if-no-files-found: error
           compression-level: 0
+
+  boot-test:
+    name: boot test (${{ matrix.firmware }})
+    runs-on: ubuntu-24.04
+    needs: build-iso
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        firmware: [bios, uefi]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download built ISO
+        uses: actions/download-artifact@v4
+        with:
+          name: axonwall-iso
+          path: dist
+
+      - name: Install QEMU and OVMF
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            qemu-system-x86 ovmf
+
+      # Boots the live ISO under TCG software emulation (hosted runners have
+      # no KVM) on both firmware paths and asserts the deterministic
+      # firewall-active marker on the SERIAL console transcript (spec wave-1
+      # criterion 2). Serial logs and assert output upload on every run.
+      - name: Run boot test (${{ matrix.firmware }})
+        run: |
+          python3 build/ci/boot-test.py \
+            --iso 'dist/axonwall-*.iso' \
+            --firmware ${{ matrix.firmware }} \
+            --work boot-work
+
+      - name: Upload boot-test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-test-${{ matrix.firmware }}-evidence
+          path: |
+            boot-work/serial.log
+            boot-work/assert-*.txt
+            boot-work/qemu-cmd.txt
+          if-no-files-found: warn
+          compression-level: 0

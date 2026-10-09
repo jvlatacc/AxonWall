@@ -62,6 +62,18 @@ func main() {
 	}
 	ln = tls.NewListener(ln, tlsConf)
 
+	// Serve the API before the boot apply: the apply's health check proves
+	// management reachability by completing a TLS handshake against THIS
+	// listener, and nothing answers that handshake until Serve is accepting
+	// connections. Serving first also means the API is up by the time the
+	// firewall-active marker (below) can fire.
+	server := &http.Server{
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- server.Serve(ln) }()
+
 	if !*skipApply {
 		// Boot apply: the committed config must be enforcing before the API
 		// accepts requests. Failure is fatal — an appliance that cannot load
@@ -70,6 +82,7 @@ func main() {
 			log.Fatalf("axond: apply committed config at boot: %v", err)
 		}
 		log.Printf("axond: firewall active (rendered from the committed config)")
+		emitFirewallActiveMarker()
 	} else {
 		log.Printf("axond: --skip-apply set: firewall NOT applied (development only)")
 	}
@@ -82,11 +95,10 @@ func main() {
 		log.Printf("axond: lan zone has no static address yet; listening on all interfaces")
 	}
 	log.Printf("axond: serving API on https://%s", ln.Addr())
-	server := &http.Server{
-		Handler:           srv.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	log.Fatal(server.Serve(ln))
+
+	// A returning Serve is always fatal: a healthy appliance daemon never
+	// stops serving.
+	log.Fatalf("axond: API server exited: %v", <-serveErr)
 }
 
 // buildPipeline assembles the apply pipeline: the nftables applier, the
