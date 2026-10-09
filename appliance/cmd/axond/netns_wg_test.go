@@ -147,11 +147,11 @@ func forwardTestFlags() []string {
 
 // runWGSender is the peer-namespace child: send one datagram, exit 0.
 func runWGSender(target string) int {
-	conn, err := net.DialTimeout("udp", target, 3*time.Second)
+	conn, err := net.DialTimeout("udp", target, 3*time.Second) //nolint:gosec // test-only child; target comes from the test harness env
 	if err != nil {
 		return 1
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if _, err := conn.Write([]byte(wgTestPayload)); err != nil {
 		return 1
 	}
@@ -168,7 +168,7 @@ func requireNetnsChild(t *testing.T) {
 // netexec runs a command, failing the test with its output on error.
 func netexec(t *testing.T, args ...string) string {
 	t.Helper()
-	out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+	out, err := exec.Command(args[0], args[1:]...).CombinedOutput() //nolint:gosec // test helper; fixed command lists at each call site
 	if err != nil {
 		t.Fatalf("%v: %v: %s", args, err, string(out))
 	}
@@ -208,7 +208,7 @@ func peerKeyPair(t *testing.T) (privPath, pubKey string) {
 	if err := os.WriteFile(f, priv, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	pub, err := exec.Command("sh", "-c", "wg pubkey < "+f).Output()
+	pub, err := exec.Command("sh", "-c", "wg pubkey < "+f).Output() //nolint:gosec // key file path from t.TempDir
 	if err != nil {
 		t.Fatalf("wg pubkey: %v", err)
 	}
@@ -220,7 +220,7 @@ func peerKeyPair(t *testing.T) (privPath, pubKey string) {
 func appliancePublicKey(t *testing.T, reloaderRoot string) string {
 	t.Helper()
 	keyFile := reloaderRoot + "/etc/wireguard/wg0.key"
-	out, err := exec.Command("sh", "-c", "wg pubkey < "+keyFile).CombinedOutput()
+	out, err := exec.Command("sh", "-c", "wg pubkey < "+keyFile).CombinedOutput() //nolint:gosec // key file path is the reloader's own tempdir root
 	if err != nil {
 		t.Fatalf("derive appliance public key: %v: %s", err, string(out))
 	}
@@ -323,11 +323,11 @@ func TestNetnsChild_WireGuardPeerTrafficViaAPI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listener on 10.10.0.1:9999: %v", err)
 	}
-	defer lc.Close()
+	defer func() { _ = lc.Close() }()
 	_ = lc.SetReadDeadline(time.Now().Add(10 * time.Second))
 
 	// The peer namespace sends one datagram into the tunnel.
-	sender := exec.Command("ip", "netns", "exec", peerNs, os.Args[0])
+	sender := exec.Command("ip", "netns", "exec", peerNs, os.Args[0]) //nolint:gosec // re-executes this test binary in the peer netns, same pattern as internal/apply
 	sender.Env = append(os.Environ(), senderEnv+"=10.10.0.1:9999")
 	if out, err := sender.CombinedOutput(); err != nil {
 		t.Fatalf("sender: %v: %s", err, string(out))

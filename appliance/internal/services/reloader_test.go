@@ -152,10 +152,10 @@ func TestReloaderSyncRemovesStaleUnits(t *testing.T) {
 	r := &Reloader{Root: root, Run: run.Run}
 
 	stale := filepath.Join(root, "etc/systemd/network/10-axonwall-old0.network")
-	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(stale), 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(stale, []byte("stale\n"), 0o644); err != nil {
+	if err := os.WriteFile(stale, []byte("stale\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.Sync(context.Background(), out); err != nil {

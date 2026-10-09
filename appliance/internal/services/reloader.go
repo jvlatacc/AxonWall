@@ -29,7 +29,7 @@ type Runner func(ctx context.Context, name string, args ...string) ([]byte, erro
 // ExecRunner is the production runner: run the command, fail with its
 // output attached (a bare exit-code error is undiagnosable in a journal).
 func ExecRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput() //nolint:gosec // command names are fixed at each service call site
 	if err != nil {
 		return out, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -271,7 +271,7 @@ func writeFileIfChanged(file string, content []byte, mode os.FileMode) (bool, er
 	case err != nil && !os.IsNotExist(err):
 		return false, fmt.Errorf("services: read %s: %w", file, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(file), 0o750); err != nil {
 		return false, fmt.Errorf("services: create dir for %s: %w", file, err)
 	}
 	tmp := file + ".tmp"
