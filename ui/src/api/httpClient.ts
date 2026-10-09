@@ -29,7 +29,9 @@ export class HttpAxonWallClient {
   constructor(options: HttpAxonWallClientOptions) {
     this.baseUrl = options.baseUrl ?? ''
     this.getToken = options.getToken
-    this.fetchImpl = options.fetchImpl ?? fetch
+    // `fetch` must stay bound to its global object — calling a detached
+    // reference throws Illegal invocation in the browser.
+    this.fetchImpl = options.fetchImpl ?? fetch.bind(globalThis)
   }
 
   async getConfig(): Promise<ConfigRevision> {
