@@ -8,6 +8,7 @@
 //	ax config put -f new.yaml -m "add wireguard peer"
 //	ax backup export -o backup.tar
 //	ax backup restore -f backup.tar
+//	ax confirm
 //
 // Authentication uses --token or the AX_TOKEN environment variable.
 package main
@@ -39,6 +40,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runConfig(args[1:], stdout, stderr)
 	case "backup":
 		return runBackup(args[1:], stdout, stderr)
+	case "confirm":
+		return runConfirm(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		usage(stdout)
 		return 0
@@ -57,6 +60,7 @@ Usage:
   ax config put -f <file> [-m <message>]
   ax backup export -o <file>
   ax backup restore -f <file>
+  ax confirm
 
 Flags:
   --url        base URL of axond (default: https://127.0.0.1)
@@ -249,6 +253,28 @@ func cmdConfigPut(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// runConfirm confirms a pending config change, canceling axond's
+// confirm-or-rollback timer before it fires.
+func runConfirm(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("ax confirm", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	newC := addFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	c, err := newC()
+	if err != nil {
+		fmt.Fprintf(stderr, "ax: %v\n", err)
+		return 2
+	}
+	if err := c.confirm("/confirm"); err != nil {
+		fmt.Fprintf(stderr, "ax: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, "confirmed")
+	return 0
+}
+
 // get performs an authenticated GET and returns the body and revision.
 func (c *client) get(path string) ([]byte, string, error) {
 	req, err := http.NewRequest(http.MethodGet, c.baseURL+path, nil)
@@ -356,6 +382,28 @@ func (c *client) upload(path string, r io.Reader) (string, error) {
 		return "", fmt.Errorf("unexpected response: %w", err)
 	}
 	return out.Revision, nil
+}
+
+// confirm performs an authenticated POST to the confirm endpoint.
+func (c *client) confirm(path string) error {
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return apiError(resp.StatusCode, body)
+	}
+	return nil
 }
 
 // apiError renders the API's JSON error envelope into a readable message.

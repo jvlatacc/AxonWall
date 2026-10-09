@@ -3,21 +3,28 @@
 // Security defaults: HTTPS only, bearer token required for the config
 // endpoints, bound to the LAN zone's address per the config store. The
 // daemon refuses to start without a token source — there is no insecure
-// mode.
+// mode. The committed config is rendered and applied at boot; config
+// changes flow through the apply pipeline (validate → stage known-good →
+// atomic apply → reload → health check → commit → confirm-or-rollback).
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/jvlatacc/AxonWall/appliance/internal/apply"
 	"github.com/jvlatacc/AxonWall/appliance/internal/config"
+	"github.com/jvlatacc/AxonWall/appliance/internal/health"
+	"github.com/jvlatacc/AxonWall/appliance/internal/rollback"
 	"github.com/jvlatacc/AxonWall/appliance/internal/store"
 )
 
@@ -28,6 +35,7 @@ func main() {
 	devToken := flag.String("dev-token", "", "API bearer token (development only)")
 	certFile := flag.String("tls-cert", "", "TLS certificate path")
 	keyFile := flag.String("tls-key", "", "TLS key path")
+	skipApply := flag.Bool("skip-apply", false, "development only: skip rendering and applying the firewall at boot")
 	flag.Parse()
 
 	st, cfg, err := openStore(*configDir)
@@ -39,16 +47,35 @@ func main() {
 		log.Fatalf("axond: %v", err)
 	}
 
-	srv := NewServer(st, apiToken, nil)
-	tlsConf, err := tlsConfig(*certFile, *keyFile)
-	if err != nil {
-		log.Fatalf("axond: %v", err)
-	}
 	ln, err := lanListener(cfg, *port)
 	if err != nil {
 		log.Fatalf("axond: %v", err)
 	}
+
+	pipeline := buildPipeline(apply.NewNftApplier(), st, ln.Addr().String())
+	srv := NewServer(st, apiToken, pipeline)
+
+	tlsConf, err := tlsConfig(*certFile, *keyFile)
+	if err != nil {
+		log.Fatalf("axond: %v", err)
+	}
 	ln = tls.NewListener(ln, tlsConf)
+
+	if !*skipApply {
+		// Boot apply: the committed config must be enforcing before the API
+		// accepts requests. Failure is fatal — an appliance that cannot load
+		// its own firewall policy must stop, not serve unenforced.
+		if err := pipeline.ApplyContext(context.Background(), cfg); err != nil {
+			log.Fatalf("axond: apply committed config at boot: %v", err)
+		}
+		log.Printf("axond: firewall active (rendered from the committed config)")
+	} else {
+		log.Printf("axond: --skip-apply set: firewall NOT applied (development only)")
+	}
+
+	// URL-table alias feeds refresh on their own cadence, outside the
+	// config-apply path (scoped set updates; keep-last-good on failure).
+	startAliasRefresher(context.Background(), st, apply.NewNftApplier())
 
 	if host := lanBindHost(cfg); host == "" {
 		log.Printf("axond: lan zone has no static address yet; listening on all interfaces")
@@ -59,6 +86,33 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	log.Fatal(server.Serve(ln))
+}
+
+// buildPipeline assembles the apply pipeline: the nftables applier, the
+// confirm-or-rollback timer manager, and the post-apply health check
+// against the API listener axond is about to serve.
+func buildPipeline(applier *apply.NftApplier, st *store.Store, apiAddr string) *apply.Pipeline {
+	checker := &health.Checker{
+		APIAddr: apiAddr,
+		Timeout: 5 * time.Second,
+		// Probe completes a TLS handshake instead of a bare TCP connect:
+		// an aborted handshake logs noise in the HTTP server and proves
+		// less. The probe checks liveness of our own listener, so peer
+		// verification is intentionally off.
+		Probe: func(ctx context.Context, addr string, timeout time.Duration) error {
+			d := &tls.Dialer{
+				NetDialer: &net.Dialer{Timeout: timeout},
+				//nolint:gosec // liveness probe of our own listener; no peer verification needed
+				Config: &tls.Config{InsecureSkipVerify: true},
+			}
+			conn, err := d.DialContext(ctx, "tcp", addr)
+			if err != nil {
+				return err
+			}
+			return conn.Close()
+		},
+	}
+	return apply.NewPipeline(applier, rollback.NewManager(rollback.DefaultRestoreTimeout), checker, st)
 }
 
 // openStore opens the config store, creating it with a first-boot default

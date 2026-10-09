@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -21,9 +22,10 @@ var matchRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.:@_-]{0,30}$`)
 var (
 	validPolicies   = []string{"accept", "drop"}
 	validVerdicts   = []string{"accept", "drop", "reject"}
-	validAliasTypes = []string{"ipv4", "ipv6"}
+	validAliasTypes = []string{"ipv4", "ipv6", "url-table"}
 	validAddressing = []string{"dhcp", "static"}
-	validNATModes   = []string{"masquerade"}
+	validNATModes   = []string{"masquerade", "port-forward"}
+	validProtos     = []string{"tcp", "udp"}
 )
 
 // namedServices maps the small set of named services wave 1 understands to
@@ -38,18 +40,26 @@ var namedServices = map[string]string{
 // ValidateService checks a service expression: a named service (ssh, http,
 // https, dns) or "proto/port" with proto in {tcp, udp} and port 1-65535.
 func ValidateService(s string) error {
-	if _, ok := namedServices[s]; ok {
-		return nil
+	_, _, err := ExpandService(s)
+	return err
+}
+
+// ExpandService resolves a service expression to its protocol and port.
+// Named services expand per namedServices; "proto/port" passes through.
+// The renderer consumes this so expansion has one source of truth.
+func ExpandService(s string) (proto string, port int, err error) {
+	if expr, ok := namedServices[s]; ok {
+		s = expr
 	}
-	proto, port, ok := strings.Cut(s, "/")
+	proto, portStr, ok := strings.Cut(s, "/")
 	if !ok || (proto != "tcp" && proto != "udp") {
-		return fmt.Errorf("unknown service %q (named: %s, or tcp|udp/port)", s, strings.Join(sortedKeys(namedServices), ", "))
+		return "", 0, fmt.Errorf("unknown service %q (named: %s, or tcp|udp/port)", s, strings.Join(sortedKeys(namedServices), ", "))
 	}
-	n, err := strconv.Atoi(port)
+	n, err := strconv.Atoi(portStr)
 	if err != nil || n < 1 || n > 65535 {
-		return fmt.Errorf("invalid port %q in service %q", port, s)
+		return "", 0, fmt.Errorf("invalid port %q in service %q", portStr, s)
 	}
-	return nil
+	return proto, n, nil
 }
 
 // ParseWGKey validates a base64-encoded 32-byte WireGuard public key.
@@ -349,11 +359,22 @@ func (v *validator) checkFirewall(c *Config, zones map[string]bool, ifn map[stri
 			v.addf("%s: invalid alias name (must match %s)", field, nameRE)
 		}
 		v.oneOf(field+".type", a.Type, validAliasTypes)
-		if len(a.Entries) == 0 {
+		if a.Type == "url-table" {
+			// The runtime set is IPv4 (feed-format decision); entries are
+			// optional — refresh populates the set from the URL.
+			if u, err := url.Parse(a.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				v.addf("%s.url: must be an absolute http(s) URL (got %q)", field, a.URL)
+			}
+		} else if len(a.Entries) == 0 {
 			v.addf("%s: must list at least one entry", field)
 		}
+		// URL-table sets are IPv4 by decision; validate their entries as such.
+		entryType := a.Type
+		if entryType == "url-table" {
+			entryType = "ipv4"
+		}
 		for j, e := range a.Entries {
-			checkAliasEntry(v, fmt.Sprintf("%s.entries[%d]", field, j), a.Type, e)
+			checkAliasEntry(v, fmt.Sprintf("%s.entries[%d]", field, j), entryType, e)
 		}
 	}
 
@@ -367,13 +388,35 @@ func (v *validator) checkFirewall(c *Config, zones map[string]bool, ifn map[stri
 			v.addf("%s: duplicate name %q", field, n.Name)
 		}
 		seenNAT[n.Name] = true
-		if _, ok := ifn[n.Out]; !ok {
-			v.addf("%s: out references undefined interface %q", field, n.Out)
-		}
-		if !zones[n.Source] {
-			v.addf("%s: source references unknown zone %q", field, n.Source)
-		}
 		v.oneOf(field+".mode", n.Mode, validNATModes)
+		switch n.Mode {
+		case "masquerade":
+			// Keep the two modes mutually exclusive so a typo lands as a
+			// validation error instead of a silently ignored field.
+			if n.In != "" || n.Proto != "" || n.DstPort != 0 || n.To != "" {
+				v.addf("%s: port-forward fields (in, proto, dst-port, to) must be empty in masquerade mode", field)
+			}
+			if _, ok := ifn[n.Out]; !ok {
+				v.addf("%s: out references undefined interface %q", field, n.Out)
+			}
+			if !zones[n.Source] {
+				v.addf("%s: source references unknown zone %q", field, n.Source)
+			}
+		case "port-forward":
+			if n.Out != "" || n.Source != "" {
+				v.addf("%s: out and source belong to masquerade mode and must be empty in port-forward mode", field)
+			}
+			if _, ok := ifn[n.In]; !ok {
+				v.addf("%s: in references undefined interface %q", field, n.In)
+			}
+			v.oneOf(field+".proto", n.Proto, validProtos)
+			if n.DstPort < 1 || n.DstPort > 65535 {
+				v.addf("%s.dst-port: must be between 1 and 65535 (got %d)", field, n.DstPort)
+			}
+			if err := validatePortForwardTarget(n.To); err != nil {
+				v.addf("%s.to: %v", field, err)
+			}
+		}
 	}
 
 	seenRule := map[string]bool{}
@@ -408,6 +451,43 @@ func (v *validator) checkFirewall(c *Config, zones map[string]bool, ifn map[stri
 	}
 }
 
+// PortForwardTarget is a parsed port-forward destination: an IPv4 address
+// and the optional rewritten port.
+type PortForwardTarget struct {
+	IP   string
+	Port int // 0 = keep the public port
+}
+
+// ParsePortForwardTarget parses a port-forward destination: an IPv4 address
+// or ip:port. IPv6 targets are later work (wave-1 feed/feature decision).
+func ParsePortForwardTarget(s string) (PortForwardTarget, error) {
+	host, portStr, err := net.SplitHostPort(strings.TrimSpace(s))
+	if err != nil {
+		// No port part: the whole string must be a bare IPv4 address.
+		ip := net.ParseIP(s)
+		if ip == nil || ip.To4() == nil {
+			return PortForwardTarget{}, fmt.Errorf("must be an IPv4 address or ip:port (got %q)", s)
+		}
+		return PortForwardTarget{IP: ip.String()}, nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || ip.To4() == nil {
+		return PortForwardTarget{}, fmt.Errorf("must be an IPv4 address or ip:port (got %q)", s)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		return PortForwardTarget{}, fmt.Errorf("invalid target port %q", portStr)
+	}
+	return PortForwardTarget{IP: ip.String(), Port: port}, nil
+}
+
+// validatePortForwardTarget checks the "to" field of a port-forward rule.
+func validatePortForwardTarget(s string) error {
+	_, err := ParsePortForwardTarget(s)
+	return err
+}
+
+// checkAliasEntry validates one alias entry against the alias's family.
 func checkAliasEntry(v *validator, field, typ, entry string) {
 	ip := net.ParseIP(entry)
 	if ip != nil {
