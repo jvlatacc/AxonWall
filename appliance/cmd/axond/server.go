@@ -5,16 +5,20 @@
 package main
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync"
 
+	"github.com/jvlatacc/AxonWall/appliance/internal/backup"
 	"github.com/jvlatacc/AxonWall/appliance/internal/config"
 	"github.com/jvlatacc/AxonWall/appliance/internal/store"
 )
@@ -32,6 +36,12 @@ type Server struct {
 	store   Store
 	token   string
 	applier Applier
+
+	// mu serializes whole apply-and-commit sequences against each other:
+	// config PUTs, backup restores (extract through swap), and exports.
+	// Store-level optimistic concurrency stays as the second line of
+	// defense for callers that bypass the server.
+	mu sync.Mutex
 }
 
 // Store narrows *store.Store to what the API needs.
@@ -39,6 +49,9 @@ type Store interface {
 	Load() (*config.Config, string, error)
 	Begin() (*store.Tx, error)
 	Rev() (string, error)
+	Dir() string
+	Replace(from string) error
+	CommitEvent(msg string) (string, error)
 }
 
 // NewServer builds the API server. token enables bearer auth on the config
@@ -60,6 +73,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /config", s.auth(s.handleGetConfig))
 	mux.HandleFunc("PUT /config", s.auth(s.handlePutConfig))
+	mux.HandleFunc("GET /backup/export", s.auth(s.handleBackupExport))
+	mux.HandleFunc("POST /backup/restore", s.auth(s.handleBackupRestore))
 	return mux
 }
 
@@ -113,6 +128,9 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	body, err := readBody(r, maxConfigBytes)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -180,6 +198,78 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-AxonWall-Revision", newRev)
 	writeJSON(w, http.StatusOK, map[string]any{"revision": newRev})
 }
+
+// handleBackupExport streams a backup archive of the store: the config
+// file, the store's full git history as a bundle, and a manifest. The
+// archive is self-verifying on restore, so a mid-stream failure surfaces
+// on the receiving side as a rejected archive rather than silently
+// truncating a backup.
+func (s *Server) handleBackupExport(w http.ResponseWriter, _ *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rev, err := s.store.Rev()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-tar")
+	w.Header().Set("X-AxonWall-Revision", rev)
+	w.Header().Set("Content-Disposition", "attachment; filename=axonwall-backup.tar")
+	if err := backup.Export(s.store.Dir(), w); err != nil {
+		log.Printf("axond: backup export failed: %v", err)
+	}
+}
+
+// handleBackupRestore imports a backup archive: wipe the store, import
+// the backup, re-render and apply through the normal pipeline, and leave
+// a fresh git history node (backup.Restore). Serialized against config
+// PUTs so an apply can never interleave with the store swap.
+func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	defer func() { _ = r.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBackupBytes+1))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("read backup: %v", err)})
+		return
+	}
+	if len(body) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "request body is empty"})
+		return
+	}
+	if int64(len(body)) > maxBackupBytes {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
+			"error": fmt.Sprintf("backup archive exceeds %d bytes", maxBackupBytes),
+		})
+		return
+	}
+
+	newRev, err := backup.Restore(s.store, bytes.NewReader(body), s.applier)
+	if err != nil {
+		var formatErr *backup.FormatError
+		switch {
+		case errors.As(err, &formatErr):
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		default:
+			// Invalid restored config surfaces as *config.ValidationError
+			// and renders the standard 422 body; everything else is 500.
+			status := http.StatusInternalServerError
+			var valErr *config.ValidationError
+			if errors.As(err, &valErr) {
+				status = http.StatusUnprocessableEntity
+			}
+			writeJSON(w, status, configErrorBody(err))
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"revision": newRev})
+}
+
+// A backup archive is a config file, a manifest, and the store's git
+// history — generous for wave 1.
+const maxBackupBytes = 64 << 20
 
 const maxConfigBytes = 1 << 20 // 1 MiB is generous for wave-1 configs
 

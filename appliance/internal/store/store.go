@@ -130,6 +130,29 @@ func (s *Store) Begin() (*Tx, error) {
 	return &Tx{store: s, base: rev, candidate: cfg}, nil
 }
 
+// CommitEvent records an operational event in the store's history without
+// changing the configuration: it commits the current working tree even
+// when it is identical to HEAD, so the event always produces a new
+// history node. Config backup restore uses it to mark a restore. Unlike
+// Tx.Commit it bypasses the apply-before-commit discipline, so callers
+// must only use it for lifecycle events the applier has already made
+// true on the system.
+func (s *Store) CommitEvent(msg string) (string, error) {
+	if msg == "" {
+		return "", fmt.Errorf("store: commit message must not be empty")
+	}
+	s.commitMu.Lock()
+	defer s.commitMu.Unlock()
+
+	if _, err := s.runGitOut("add", "-A", FileName); err != nil {
+		return "", err
+	}
+	if _, err := s.runGitOut("commit", "--allow-empty", "-q", "-m", msg); err != nil {
+		return "", err
+	}
+	return s.Rev()
+}
+
 // writeFile marshals and validates cfg, then writes it into the store
 // directory. Callers hold the commit mutex.
 func (s *Store) writeFile(cfg *config.Config) error {
