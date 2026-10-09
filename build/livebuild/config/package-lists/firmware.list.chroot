@@ -1,0 +1,10 @@
+## Curated non-free-firmware subset — Realtek + Intel NIC firmware only (locked decision).
+##
+## Debian does not split Intel ethernet firmware into its own package: the
+## e100/igb/igc/ixgbe/i40e/ice blobs ship inside firmware-misc-nonfree, so that
+## package is the minimal set that covers Intel NICs. firmware-realtek covers
+## Realtek wired + WiFi NICs; firmware-iwlwifi covers Intel WiFi NICs.
+## Verified in build/PACKAGE-VERIFY.md (trixie non-free-firmware, 20250410-2).
+firmware-realtek
+firmware-iwlwifi
+firmware-misc-nonfree

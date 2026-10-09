@@ -7,6 +7,10 @@ on:
     branches: [main, 'release/**']
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   go:
     name: go / test+lint
@@ -29,3 +33,46 @@ jobs:
         with:
           version: v2.14.0
           working-directory: appliance
+
+  build-iso:
+    name: build hybrid BIOS+UEFI ISO
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      # Retries absorb residual registry flakiness (Docker Hub/OCI mirror 429s
+      # from shared runner IPs) — the failure mode observed on the first CI run.
+      - name: Build pinned builder image
+        run: |
+          for attempt in 1 2 3; do
+            if docker build -t axonwall/iso-builder:ci build/container; then
+              exit 0
+            fi
+            echo "docker build attempt ${attempt} failed" >&2
+            sleep 60
+          done
+          echo "FATAL: docker build failed after 3 attempts" >&2
+          exit 1
+
+      - name: Build ISO (one command from a clean checkout)
+        run: |
+          docker run --rm --privileged -v "$PWD:/repo" axonwall/iso-builder:ci /repo/build/build-iso.sh
+
+      - name: Upload ISO artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: axonwall-iso
+          path: |
+            dist/*.iso
+            dist/SHA256SUMS
+            dist/*.manifest.txt
+            dist/package-verify.txt
+            dist/el-torito-report.txt
+          if-no-files-found: error
+          compression-level: 0
