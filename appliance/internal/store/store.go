@@ -36,9 +36,13 @@ type Store struct {
 	commitMu sync.Mutex
 }
 
-// Open opens (creating if needed) the config store rooted at dir. The
-// directory becomes a git work tree containing axonwall.yaml. Use Init to
-// seed a fresh store with an initial configuration.
+// Open opens an existing or empty store directory, creating the git dir
+// when missing. The directory becomes a git work tree containing
+// axonwall.yaml. Use Init to seed a fresh store with an initial
+// configuration. A pre-existing axonwall.yaml with no git history is
+// adopted into an initial commit — the recovery path for a config
+// partition restored without .git — so the working file is never
+// uncommitted.
 func Open(dir string) (*Store, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("store: directory must not be empty")
@@ -51,7 +55,18 @@ func Open(dir string) (*Store, error) {
 	} else if err != nil {
 		return nil, fmt.Errorf("store: stat %s: %w", gitDir, err)
 	}
-	return &Store{dir: dir}, nil
+	s := &Store{dir: dir}
+	if _, err := os.Stat(s.path()); err == nil {
+		if _, revErr := s.Rev(); revErr != nil {
+			if _, err := s.runGitOut("add", FileName); err != nil {
+				return nil, err
+			}
+			if _, err := s.runGitOut("commit", "-q", "-m", "adopt existing config"); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return s, nil
 }
 
 // Init creates a fresh store at dir and seeds it with cfg as the initial
@@ -139,5 +154,8 @@ func (s *Store) writeFile(cfg *config.Config) error {
 // Dir returns the directory backing the store.
 func (s *Store) Dir() string { return s.dir }
 
+// Join returns the path of the managed configuration file inside dir.
+func Join(dir string) string { return filepath.Join(dir, FileName) }
+
 // path returns the absolute path of the managed configuration file.
-func (s *Store) path() string { return filepath.Join(s.dir, FileName) }
+func (s *Store) path() string { return Join(s.dir) }

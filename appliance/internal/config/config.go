@@ -40,6 +40,52 @@ type Config struct {
 	Firewall   Firewall        `yaml:"firewall"`
 }
 
+// InterfaceByName returns the interface with the given logical name.
+func (c *Config) InterfaceByName(name string) (Interface, bool) {
+	for i := range c.Interfaces {
+		if c.Interfaces[i].Name == name {
+			return c.Interfaces[i], true
+		}
+	}
+	return Interface{}, false
+}
+
+// Default returns the first-boot configuration: a safe default-drop
+// gateway with one WAN (DHCP) and one LAN (static) interface. First-boot
+// setup refines it; it exists so a fresh install boots with the firewall
+// up and the API reachable on the LAN.
+func Default() *Config {
+	return &Config{
+		Version: Version,
+		Zones: map[string]Zone{
+			"wan": {Interfaces: []string{"wan0"}},
+			"lan": {Interfaces: []string{"lan0"}},
+		},
+		Interfaces: []Interface{
+			{Name: "wan0", Match: "enp1s0", Addressing: "dhcp"},
+			{Name: "lan0", Match: "enp2s0", Addressing: "static",
+				Address: []string{"192.168.1.1/24"}},
+		},
+		Services: Services{
+			DNS: &DNS{
+				Resolver: "unbound",
+				Listen:   []string{"lan"},
+			},
+			DHCP: &DHCP{
+				Pools: []DHCPPool{{
+					Zone:    "lan",
+					Range:   [2]string{"192.168.1.100", "192.168.1.199"},
+					Gateway: "192.168.1.1",
+					DNS:     "192.168.1.1",
+				}},
+			},
+		},
+		Firewall: Firewall{
+			Default: Defaults{Input: "drop", Forward: "drop", Output: "accept"},
+		},
+	}
+}
+
 // Zone groups interfaces for rule addressing. Interface membership is
 // exclusive: an interface belongs to at most one zone.
 type Zone struct {
