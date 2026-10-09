@@ -2,6 +2,7 @@ import type { ReactElement } from 'react'
 import type { AxonWallConfig, SystemStatus } from '../api/types'
 import { Badge } from '../components/ui/Badge'
 import { EmptyState } from '../components/ui/EmptyState'
+import { formatUptime } from '../format/format'
 
 export interface DashboardPageProps {
   readonly config: AxonWallConfig
@@ -105,7 +106,7 @@ export function DashboardPage({ config, status }: DashboardPageProps): ReactElem
                   </tr>
                   <tr>
                     <td>Uptime</td>
-                    <td>{status.uptimeSeconds}s</td>
+                    <td>{formatUptime(status.uptimeSeconds)}</td>
                   </tr>
                   <tr>
                     <td>Configuration</td>

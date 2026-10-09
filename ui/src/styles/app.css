@@ -547,3 +547,32 @@ h1, h2, h3 {
     height: auto;
   }
 }
+
+/* Dashboard stat cards — config-at-a-glance counters. */
+.axw-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.axw-stat-card {
+  background: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lifted);
+  padding: var(--space-4);
+}
+
+.axw-stat-label {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-bottom: var(--space-1);
+}
+
+.axw-stat-value {
+  color: var(--text-primary);
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
