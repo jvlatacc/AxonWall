@@ -124,6 +124,7 @@ a 2 GiB size limit (the GitHub release-asset cap).
 | `ui/` | React 19 + TypeScript + Vite web console, served by axond |
 | `docs/` | Architecture and design records ([architecture.md](docs/architecture.md), [rules-semantics.md](docs/rules-semantics.md), [service-renderers.md](docs/service-renderers.md)) |
 | `.github/workflows/` | CI (Go tests/lint, ISO build, QEMU boot tests, commit hygiene) and the tag-driven release pipeline |
+| `.github/scripts/` | CI helper scripts — the [commit-hygiene gate](.github/scripts/commit-hygiene.sh) |
 
 ## Documentation
 
