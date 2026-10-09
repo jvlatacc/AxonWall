@@ -40,9 +40,10 @@ type Health interface {
 type Pipeline struct {
 	// ConfirmWindow is the confirmation window for committed applies.
 	ConfirmWindow time.Duration
-	// Reload re-materializes service configs (dnsmasq, unbound, wireguard)
-	// from the candidate; nil in wave 1 until service renderers land.
-	Reload func(cfg *config.Config) error
+	// Reload re-materializes service configs (systemd-networkd units,
+	// dnsmasq, unbound, wireguard) from the rendered artifacts; nil when the
+	// pipeline runs without a service reloader (kernel-only tests).
+	Reload func(ctx context.Context, rendered *render.Rendered) error
 
 	mu      sync.Mutex
 	nft     *NftApplier
@@ -102,7 +103,7 @@ func (p *Pipeline) ApplyContext(ctx context.Context, cfg *config.Config) error {
 		return errors.Join(err, guard.Restore(ctx))
 	}
 	if p.Reload != nil {
-		if err := p.Reload(cfg); err != nil {
+		if err := p.Reload(ctx, rendered); err != nil {
 			return errors.Join(err, guard.Restore(ctx))
 		}
 	}
