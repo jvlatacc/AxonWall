@@ -211,7 +211,7 @@ export function configFromYaml(text: string): AxonWallConfig {
     if (type !== 'ipv4' && type !== 'ipv6' && type !== 'url-table') {
       throw new Error(`firewall.aliases.${name}: type must be ipv4, ipv6, or url-table`)
     }
-    const url = alias['url'] === undefined ? undefined : expectString(alias['url'], `firewall.aliases.${name}.url`)
+    const url = optionalString(alias['url'], `firewall.aliases.${name}.url`)
     aliases[name] = {
       type: type as AliasType,
       ...(url !== undefined ? { url } : {}),
@@ -250,15 +250,18 @@ function servicesFromYaml(raw: unknown): Services | undefined {
 function dnsFromYaml(raw: unknown): DnsService | undefined {
   if (raw === undefined || raw === null) return undefined
   const d = asRecord(raw, 'services.dns')
-  const mode = d['mode']
-  if (mode !== undefined && mode !== 'recursive' && mode !== 'forward') {
+  // The appliance's YAML normalization serializes an unset mode as ""
+  // (the Go zero value); accept it and treat it as the recursive default
+  // instead of rejecting configs the appliance itself wrote.
+  const rawMode = d['mode'] === '' ? undefined : d['mode']
+  if (rawMode !== undefined && rawMode !== 'recursive' && rawMode !== 'forward') {
     throw new Error('services.dns.mode: must be recursive or forward')
   }
   const forwarders = d['forwarders'] === undefined ? undefined : stringList(d['forwarders'], 'services.dns.forwarders')
   return {
     resolver: 'unbound',
     listen: stringList(d['listen'], 'services.dns.listen'),
-    ...(mode !== undefined ? { mode } : {}),
+    ...(rawMode !== undefined ? { mode: rawMode } : {}),
     ...(forwarders !== undefined ? { forwarders } : {}),
   }
 }
@@ -347,16 +350,14 @@ function rulesFromYaml(raw: unknown): FirewallRule[] {
   if (!Array.isArray(raw)) return []
   return raw.map((entry, i) => {
     const r = asRecord(entry, `firewall.rules[${i}]`)
-    const service = r['service']
-    const sourceAlias = r['source-alias']
+    const service = optionalString(r['service'], `firewall.rules[${i}].service`)
+    const sourceAlias = optionalString(r['source-alias'], `firewall.rules[${i}].source-alias`)
     return {
       name: expectString(r['name'], `firewall.rules[${i}].name`),
       from: expectString(r['from'], `firewall.rules[${i}].from`),
       to: expectString(r['to'], `firewall.rules[${i}].to`),
-      ...(service !== undefined ? { service: expectString(service, `firewall.rules[${i}].service`) } : {}),
-      ...(sourceAlias !== undefined
-        ? { sourceAlias: expectString(sourceAlias, `firewall.rules[${i}].source-alias`) }
-        : {}),
+      ...(service !== undefined ? { service } : {}),
+      ...(sourceAlias !== undefined ? { sourceAlias } : {}),
       verdict: expectVerdict(r['verdict'], `firewall.rules[${i}].verdict`),
     }
   })
@@ -379,6 +380,14 @@ function asRecord(value: unknown, field: string): Record<string, unknown> {
 function expectString(value: unknown, field: string): string {
   if (typeof value !== 'string' || value === '') throw new Error(`${field} must be a non-empty string`)
   return value
+}
+
+// Optional string fields: stores written by older axond normalizers carry
+// zero values ("") for unset fields — read them as absent instead of
+// rejecting configs the appliance itself accepts.
+function optionalString(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === '') return undefined
+  return expectString(value, field)
 }
 
 function expectNumber(value: unknown, field: string): number {

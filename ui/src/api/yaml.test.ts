@@ -45,6 +45,15 @@ describe('yaml round-trip', () => {
     expect(dnsBlock).not.toContain('forwarders')
   })
 
+  it('loads a config whose DNS mode was normalized to an empty string', () => {
+    // axond's YAML normalization serializes an unset mode as "" (the Go zero
+    // value) — the console must load such stores instead of locking the
+    // operator out of a box it cannot read.
+    const doc = configToYaml(extendedConfig()).replace('mode: forward', 'mode: ""')
+    expect(() => configFromYaml(doc)).not.toThrow()
+    expect(configFromYaml(doc).services?.dns?.mode).toBeUndefined()
+  })
+
   it('omits alias url for non-feed aliases', () => {
     const yaml = configToYaml(sampleConfig())
     expect(yaml).not.toContain('url:')
