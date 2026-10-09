@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """AxonWall CI install-to-disk test (spec art_mxHM10hO, wave-1 criterion 3).
 
-Boots the built ISO in QEMU under TCG (hosted runners have no KVM), selects
-"Start installer" from the serial boot menu, and lets the preseeded installer
-run unattended on a sparse raw disk. The installer reboots at the end;
--no-reboot makes QEMU exit. The test then boots the installed system from disk
-(no ISO attached), logs in over the serial getty, probes the running
-appliance, powers off, and asserts — on the serial transcripts and host-side
-against the disk image — that the install is unattended, the firewall is
-active, and /config sits on its own AXONCONFIG-labelled partition.
+Runs the ISO's debian-installer unattended under QEMU/TCG (hosted runners have
+no KVM). The installer kernel/initrd are booted straight from the ISO via
+-kernel/-initrd/-append with the preseed on the kernel command line — the
+first CI run showed boot-menu serial input (isolinux/GRUB arrow keys) does
+not register over the QEMU stdio pipe, so menu interaction is designed out.
+The installer reboots at the end; -no-reboot makes QEMU exit. The test then
+boots the installed system from disk (no ISO attached), logs in over the
+serial getty, probes the running appliance, powers off, and asserts — on the
+serial transcripts and host-side against the disk image — that the install
+is unattended, the firewall is active, and /config sits on its own
+AXONCONFIG-labelled partition.
 
 All evidence lands in the work directory: serial-install.log,
 serial-runtime.log, assert-*.txt, assert-summary.txt.
@@ -34,7 +37,6 @@ CONFIGURED_MARKER = "AxonWall: installed system configured"
 # Bootstrap root password — public by design, documented in build/README.md.
 ROOT_PASSWORD = "axonwall-bootstrap"
 
-MENU_HINT = "Live system (amd64)"  # first menu entry text, BIOS and UEFI
 LOGIN_HINT = "login:"
 
 OVMF_CANDIDATES = (
@@ -147,19 +149,36 @@ def qemu_base_args(disk: str, firmware: str, workdir: str) -> list:
     return args
 
 
+def extract_installer(iso: str, workdir: str) -> tuple:
+    """Pull the debian-installer kernel/initrd out of the ISO (xorriso, no root)."""
+    dest = os.path.join(workdir, "iso-extract")
+    out = run(["xorriso", "-osirrox", "on", "-indev", iso,
+               "-extract", "/install", os.path.join(dest, "install")],
+              capture_output=True, text=True)
+    kernel = os.path.join(dest, "install", "vmlinuz")
+    initrd = os.path.join(dest, "install", "initrd.gz")
+    if not (os.path.exists(kernel) and os.path.exists(initrd)):
+        die(f"installer kernel/initrd not extracted from {iso}: "
+            f"{out.stdout[-500:]} {out.stderr[-500:]}")
+    return kernel, initrd
+
+
 def phase_install(iso: str, disk: str, firmware: str, workdir: str, timeout_s: int) -> None:
-    """Boot the ISO, select 'Start installer', run the preseeded install to the end."""
+    """Boot the ISO's installer kernel directly; the preseed runs it unattended."""
+    kernel, initrd = extract_installer(iso, workdir)
     args = qemu_base_args(disk, firmware, workdir)
-    args += ["-cdrom", iso, "-boot", "d"]
+    args += [
+        "-cdrom", iso,
+        "-kernel", kernel,
+        "-initrd", initrd,
+        # The same append live-build gives the installer entries, minus
+        # initrd= (QEMU loads the initrd itself): preseed off the cdrom,
+        # unattended, serial console.
+        "-append", "file=/cdrom/install/preseed.cfg auto=true priority=critical "
+                   "console=ttyS0,115200n8",
+    ]
     with open(os.path.join(workdir, "serial-install.log"), "wb") as lf:
         vm = SerialVM(args, lf)
-        # The serial boot menu lists "Live system (amd64)" first on both
-        # isolinux (BIOS) and GRUB (UEFI); "Start installer" is two items down.
-        vm.wait_for(MENU_HINT, time.monotonic() + 300)
-        log(f"[{firmware}] boot menu up — selecting 'Start installer'")
-        for keys, pause in ((b"\x1b[B", 0.4), (b"\x1b[B", 0.4), (b"\r", 0.4)):
-            vm.send(keys)
-            time.sleep(pause)
         # debian-installer runs unattended and reboots at the end; -no-reboot
         # exits QEMU. The late-command marker is asserted after exit.
         vm.wait_exit(time.monotonic() + timeout_s, "unattended install")

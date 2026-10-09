@@ -59,7 +59,7 @@ run separately.
 | `build-iso.sh` | the one-command wrapper |
 | `package-verify.sh` | trixie package-verification spike (CI gate) |
 | `PACKAGE-VERIFY.md` | spike findings (including the opennds correction) |
-| `ci/install-test.py` | QEMU TCG install-to-disk CI driver (see the install test section) |
+| `ci/install-test.py` | QEMU TCG install-to-disk CI driver: boots the ISO's debian-installer kernel directly (-kernel/-initrd, preseed on the cmdline — boot-menu serial input is unreliable over QEMU stdio), then reboots from disk and asserts partition/service/firewall state |
 
 ## Known limitation (deliberate, wave-1 scope)
 
