@@ -6,6 +6,8 @@
 //	ax config get
 //	ax config get --url https://192.168.1.1
 //	ax config put -f new.yaml -m "add wireguard peer"
+//	ax backup export -o backup.tar
+//	ax backup restore -f backup.tar
 //
 // Authentication uses --token or the AX_TOKEN environment variable.
 package main
@@ -35,6 +37,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "config":
 		return runConfig(args[1:], stdout, stderr)
+	case "backup":
+		return runBackup(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		usage(stdout)
 		return 0
@@ -51,6 +55,8 @@ func usage(w io.Writer) {
 Usage:
   ax config get
   ax config put -f <file> [-m <message>]
+  ax backup export -o <file>
+  ax backup restore -f <file>
 
 Flags:
   --url        base URL of axond (default: https://127.0.0.1)
@@ -106,6 +112,87 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "ax: unknown config command %q (want get|put)\n", args[0])
 		return 2
 	}
+}
+
+func runBackup(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "ax: expected 'backup export' or 'backup restore'")
+		return 2
+	}
+	switch args[0] {
+	case "export":
+		return cmdBackupExport(args[1:], stdout, stderr)
+	case "restore":
+		return cmdBackupRestore(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "ax: unknown backup command %q (want export|restore)\n", args[0])
+		return 2
+	}
+}
+
+func cmdBackupExport(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("ax backup export", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	newC := addFlags(fs)
+	out := fs.String("o", "", "output file for the backup archive")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *out == "" {
+		fmt.Fprintln(stderr, "ax: backup export requires -o <file>")
+		return 2
+	}
+	c, err := newC()
+	if err != nil {
+		fmt.Fprintf(stderr, "ax: %v\n", err)
+		return 2
+	}
+	f, err := os.Create(*out)
+	if err != nil {
+		fmt.Fprintf(stderr, "ax: %v\n", err)
+		return 1
+	}
+	defer func() { _ = f.Close() }()
+	rev, err := c.download("/backup/export", f)
+	if err != nil {
+		fmt.Fprintf(stderr, "ax: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "wrote %s\n", *out)
+	fmt.Fprintf(stderr, "# revision %s\n", rev)
+	return 0
+}
+
+func cmdBackupRestore(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("ax backup restore", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	newC := addFlags(fs)
+	file := fs.String("f", "", "backup archive to restore from")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *file == "" {
+		fmt.Fprintln(stderr, "ax: backup restore requires -f <file>")
+		return 2
+	}
+	f, err := os.Open(*file) //nolint:gosec // G304: the path is operator-supplied by design
+	if err != nil {
+		fmt.Fprintf(stderr, "ax: %v\n", err)
+		return 1
+	}
+	defer func() { _ = f.Close() }()
+	c, err := newC()
+	if err != nil {
+		fmt.Fprintf(stderr, "ax: %v\n", err)
+		return 2
+	}
+	rev, err := c.upload("/backup/restore", f)
+	if err != nil {
+		fmt.Fprintf(stderr, "ax: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "restored, committed %s\n", rev)
+	return 0
 }
 
 func cmdConfigGet(args []string, stdout, stderr io.Writer) int {
@@ -195,6 +282,61 @@ func (c *client) put(path string, data []byte, message string) (string, error) {
 	if message != "" {
 		req.Header.Set("X-AxonWall-Message", message)
 	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", apiError(resp.StatusCode, body)
+	}
+	var out struct {
+		Revision string `json:"revision"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", fmt.Errorf("unexpected response: %w", err)
+	}
+	return out.Revision, nil
+}
+
+// download performs an authenticated GET and streams the response body
+// to w. It returns the X-AxonWall-Revision header when present. Unlike
+// get, there is no body-size limit: the response is streamed to the
+// caller's writer, not buffered.
+func (c *client) download(path string, w io.Writer) (string, error) {
+	req, err := http.NewRequest(http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return "", apiError(resp.StatusCode, body)
+	}
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		return "", err
+	}
+	return resp.Header.Get("X-AxonWall-Revision"), nil
+}
+
+// upload performs an authenticated POST of r's contents and returns the
+// new revision.
+func (c *client) upload(path string, r io.Reader) (string, error) {
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+path, r)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/x-tar")
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return "", err

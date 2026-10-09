@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,7 +11,7 @@ import (
 	"testing"
 )
 
-// fakeAxond serves the two endpoints ax exercises, with token auth.
+// fakeAxond serves the endpoints ax exercises, with token auth.
 func fakeAxond(t *testing.T, token string) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -37,6 +38,31 @@ func fakeAxond(t *testing.T, token string) *httptest.Server {
 		}
 		w.Header().Set("X-AxonWall-Revision", "def456")
 		fmt.Fprint(w, `{"revision":"def456"}`)
+	})
+	mux.HandleFunc("GET /backup/export", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":"missing or invalid bearer token"}`)
+			return
+		}
+		w.Header().Set("X-AxonWall-Revision", "abc123")
+		w.Header().Set("Content-Type", "application/x-tar")
+		fmt.Fprint(w, "fake-backup-archive-bytes")
+	})
+	mux.HandleFunc("POST /backup/restore", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":"missing or invalid bearer token"}`)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		if err != nil || len(body) == 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":"request body is empty"}`)
+			return
+		}
+		fmt.Fprint(w, `{"revision":"fed789"}`)
 	})
 	return httptest.NewServer(mux)
 }
@@ -127,5 +153,80 @@ func TestRunUnknownCommand(t *testing.T) {
 	setArgs(t, []string{"bogus"})
 	if code := run(os.Args[1:], &stdout, &stderr); code != 2 {
 		t.Fatalf("unknown command exited %d, want 2", code)
+	}
+}
+
+func TestRunBackupExport(t *testing.T) {
+	srv := fakeAxond(t, "tok")
+	defer srv.Close()
+
+	out := t.TempDir() + "/backup.tar"
+	var stdout, stderr bytes.Buffer
+	setArgs(t, []string{"backup", "export", "--url", srv.URL, "--token", "tok", "-o", out})
+	if code := run(os.Args[1:], &stdout, &stderr); code != 0 {
+		t.Fatalf("backup export exited %d: %s", code, stderr.String())
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read exported archive: %v", err)
+	}
+	if string(data) != "fake-backup-archive-bytes" {
+		t.Errorf("exported archive = %q, want the served body", data)
+	}
+	if !strings.Contains(stdout.String(), "wrote") {
+		t.Errorf("stdout = %q, want the wrote confirmation", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "abc123") {
+		t.Errorf("stderr = %q, want the revision comment", stderr.String())
+	}
+}
+
+func TestRunBackupExportRequiresOutput(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	setArgs(t, []string{"backup", "export", "--token", "tok"})
+	if code := run(os.Args[1:], &stdout, &stderr); code != 2 {
+		t.Fatalf("backup export without -o exited %d, want 2", code)
+	}
+}
+
+func TestRunBackupExportAuthFailure(t *testing.T) {
+	srv := fakeAxond(t, "tok")
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	setArgs(t, []string{"backup", "export", "--url", srv.URL, "--token", "wrong",
+		"-o", t.TempDir() + "/backup.tar"})
+	if code := run(os.Args[1:], &stdout, &stderr); code != 1 {
+		t.Fatalf("backup export with bad token exited %d, want 1: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "401") {
+		t.Fatalf("stderr missing 401: %q", stderr.String())
+	}
+}
+
+func TestRunBackupRestore(t *testing.T) {
+	srv := fakeAxond(t, "tok")
+	defer srv.Close()
+
+	file := t.TempDir() + "/backup.tar"
+	if err := os.WriteFile(file, []byte("fake-backup-archive-bytes"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	setArgs(t, []string{"backup", "restore", "--url", srv.URL, "--token", "tok", "-f", file})
+	if code := run(os.Args[1:], &stdout, &stderr); code != 0 {
+		t.Fatalf("backup restore exited %d: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "fed789") {
+		t.Fatalf("stdout = %q, want the restored revision", stdout.String())
+	}
+}
+
+func TestRunBackupRestoreRequiresFile(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	setArgs(t, []string{"backup", "restore", "--token", "tok"})
+	if code := run(os.Args[1:], &stdout, &stderr); code != 2 {
+		t.Fatalf("backup restore without -f exited %d, want 2", code)
 	}
 }
