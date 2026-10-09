@@ -1,0 +1,3 @@
+# Repository policy for obvious automation.
+defaultBranch: main
+mergeMethod: squash  # squash, merge, and rebase are all enabled; squash chosen as default
