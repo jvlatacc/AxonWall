@@ -184,7 +184,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 const maxConfigBytes = 1 << 20 // 1 MiB is generous for wave-1 configs
 
 func readBody(r *http.Request, limit int64) ([]byte, error) {
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(r.Body, limit))
 	if err != nil {
 		return nil, err

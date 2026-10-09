@@ -24,7 +24,9 @@ func gitArgs(dir string, args ...string) []string {
 // runGitDir runs a git command against dir's repository and returns
 // trimmed stdout.
 func runGitDir(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", gitArgs(dir, args...)...)
+	// dir originates from axond's --config-dir (operator trust boundary),
+	// never from network input; arguments are internal git plumbing verbs.
+	cmd := exec.Command("git", gitArgs(dir, args...)...) //nolint:gosec // internal wrapper, operator-supplied store dir
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -52,5 +54,5 @@ func (s *Store) runGitOut(args ...string) (string, error) {
 // restore writes old content back after a failed commit so the working
 // file never disagrees with HEAD.
 func restore(path string, old []byte) error {
-	return os.WriteFile(path, old, 0o600)
+	return os.WriteFile(path, old, 0o600) //nolint:gosec // path is the store's own config file being rolled back to bytes read from it
 }

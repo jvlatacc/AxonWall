@@ -271,7 +271,7 @@ func (v *validator) checkDHCP(c *Config, d *DHCP, zones map[string]bool, ifn map
 			ranges = append(ranges, poolRange{pool: i, start: start, end: end})
 			if zones[p.Zone] {
 				subs := zoneSubnets(c, p.Zone, ifn)
-				if len(subs) > 0 && !(inSubnets(start, subs) && inSubnets(end, subs)) {
+				if len(subs) > 0 && (!inSubnets(start, subs) || !inSubnets(end, subs)) {
 					v.addf("%s.range: %s-%s is outside the subnets of zone %q", field, start, end, p.Zone)
 				}
 			}
