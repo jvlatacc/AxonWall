@@ -167,3 +167,58 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+
+  install-test:
+    name: install-to-disk (${{ matrix.firmware }})
+    runs-on: ubuntu-24.04
+    needs: build-iso
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        firmware: [bios, uefi]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download built ISO
+        uses: actions/download-artifact@v4
+        with:
+          name: axonwall-iso
+          path: dist
+
+      - name: Install QEMU and OVMF
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            qemu-system-x86 ovmf xorriso
+
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      # Unattended install → reboot from disk → serial + host-side asserts
+      # (spec wave-1 criterion 3). TCG software emulation: hosted runners have
+      # no KVM. Evidence (serial logs, assert output) uploads on every run.
+      - name: Run install-to-disk test (${{ matrix.firmware }})
+        run: |
+          python3 build/ci/install-test.py \
+            --iso 'dist/*.iso' \
+            --firmware ${{ matrix.firmware }} \
+            --work install-work
+
+      - name: Upload install-test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-test-${{ matrix.firmware }}-evidence
+          path: |
+            install-work/serial-install.log
+            install-work/serial-runtime.log
+            install-work/assert-part.txt
+            install-work/assert-firewall.txt
+            install-work/assert-services.txt
+            install-work/assert-disk.txt
+            install-work/assert-summary.txt
+          if-no-files-found: warn
+          compression-level: 0

@@ -70,6 +70,24 @@ awk '$2 != "/config"' /target/etc/fstab > /target/etc/fstab.axonwall
 printf 'LABEL=AXONCONFIG\t/config\text4\tdefaults,nofail\t0\t2\n' >> /target/etc/fstab.axonwall
 mv /target/etc/fstab.axonwall /target/etc/fstab
 
+# --- UEFI without NVRAM: removable-media fallback path on the ESP ----------------
+# efibootmgr entries live in board NVRAM — a fresh board (or OVMF with clean
+# vars) has none, so the ESP must also expose the standard \EFI\BOOT\BOOTX64.EFI
+# fallback. Keep the Secure Boot chain intact: BOOTX64.EFI is the shim when one
+# is installed, with grub next to it (shim loads grubx64.efi from its own dir).
+# Idempotent and skipped on BIOS-only installs (no ESP).
+if [ -d /target/boot/efi/EFI ]; then
+	SHIM_EFI="$(find /target/boot/efi/EFI -name 'shimx64.efi' 2>/dev/null | head -n1)"
+	GRUB_EFI="$(find /target/boot/efi/EFI -name 'grubx64.efi' 2>/dev/null | head -n1)"
+	mkdir -p /target/boot/efi/EFI/BOOT
+	if [ -n "$SHIM_EFI" ] && [ -n "$GRUB_EFI" ]; then
+		cp "$SHIM_EFI" /target/boot/efi/EFI/BOOT/BOOTX64.EFI
+		cp "$GRUB_EFI" /target/boot/efi/EFI/BOOT/grubx64.efi
+	elif [ -n "$GRUB_EFI" ]; then
+		cp "$GRUB_EFI" /target/boot/efi/EFI/BOOT/BOOTX64.EFI
+	fi
+fi
+
 # --- serial console persistence (installed GRUB: menu + kernel on ttyS0) --------
 sed -i 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8"|' \
 	/target/etc/default/grub
