@@ -78,9 +78,19 @@ echo "${REPORT}" | grep -qi 'isolinux' || {
 	echo "FATAL: no BIOS (isolinux) El Torito boot entry — hybrid media broken" >&2
 	exit 1
 }
-EFI_IMG_PATH="$(printf '%s\n' "${REPORT}" | grep -oiE "'/[^']*efi[^']*\.img'" | head -1 | tr -d "'" || true)"
-if [ -z "${EFI_IMG_PATH}" ]; then
+# xorriso's plain report splits per-image fields across lines:
+#   El Torito boot img :   2  UEFI  y   none  0x0000  0x00   6656  135
+#   El Torito img path :   2  /boot/grub/efi.img
+# Join them by image number (field 6) instead of assuming a one-line format.
+UEFI_N="$(printf '%s\n' "${REPORT}" | awk '$1=="El" && $3=="boot" && $4=="img" && $7=="UEFI" {print $6; exit}')"
+if [ -z "${UEFI_N}" ]; then
 	echo "FATAL: no UEFI boot image in the El Torito report; report follows:" >&2
+	cat "${DIST_DIR}/el-torito-report.txt" >&2
+	exit 1
+fi
+EFI_IMG_PATH="$(printf '%s\n' "${REPORT}" | awk -v n="${UEFI_N}" '$1=="El" && $3=="img" && $4=="path" && $6==n {print $7; exit}')"
+if [ -z "${EFI_IMG_PATH}" ]; then
+	echo "FATAL: UEFI El Torito image ${UEFI_N} has no path in the report; report follows:" >&2
 	cat "${DIST_DIR}/el-torito-report.txt" >&2
 	exit 1
 fi
