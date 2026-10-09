@@ -1,0 +1,73 @@
+#!/bin/sh
+# AxonWall installed-system configuration — executed by d-i preseed/late_command
+# (runs in the installer environment; /target is the mounted installed system and
+# /cdrom is the AxonWall ISO).
+#
+# Carries the live image's appliance state into the installed system:
+#   - the nftables baseline, resolver config, and key-only SSH drop-in (identical
+#     files to includes.chroot_after_packages — keep in sync),
+#   - the same service enable set as hooks/normal/0100-axonwall-enable-services,
+#   - deterministic identity, serial-console getty and GRUB wiring.
+set -eu
+
+STAGING=/cdrom/axonwall/installed-system
+
+# --- appliance files (same firewall state as the live image) --------------------
+cp "$STAGING/etc/nftables.conf" /target/etc/nftables.conf
+# The live image self-resolves via Unbound on loopback; the installed system must
+# too (rm first: d-i's resolv.conf may be a symlink into its own runtime).
+rm -f /target/etc/resolv.conf
+cp "$STAGING/etc/resolv.conf" /target/etc/resolv.conf
+mkdir -p /target/etc/ssh/sshd_config.d
+cp "$STAGING/etc/ssh/sshd_config.d/10-axonwall-hardening.conf" \
+	/target/etc/ssh/sshd_config.d/10-axonwall-hardening.conf
+mkdir -p /target/etc/systemd/system/nftables.service.d
+cp "$STAGING/etc/systemd/system/nftables.service.d/axonwall-banner.conf" \
+	/target/etc/systemd/system/nftables.service.d/axonwall-banner.conf
+cp "$STAGING/etc/systemd/system/axond.service" \
+	/target/etc/systemd/system/axond.service
+
+# --- services: same enable set as the live image --------------------------------
+in-target systemctl enable systemd-networkd.service
+in-target systemctl enable nftables.service
+in-target systemctl enable unbound.service
+in-target systemctl enable serial-getty@ttyS0.service
+in-target systemctl enable ssh.service
+# axond: ConditionPathExists-gated on /usr/bin/axond (the appliance package lands
+# with the axond integration) — enabling now is dormant until that package exists.
+in-target systemctl enable axond.service
+in-target systemctl disable dnsmasq.service 2>/dev/null || true
+
+# --- deterministic identity ------------------------------------------------------
+printf 'axonwall\n' > /target/etc/hostname
+cat > /target/etc/hosts <<'EOF'
+127.0.0.1	localhost
+127.0.1.1	axonwall
+
+# The following lines are desirable for IPv6 capable hosts
+::1     localhost ip6-localhost ip6-loopback
+fe00::0 ip6-localnet
+ff00::0 ip6-mcastprefix
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+EOF
+
+# --- serial console persistence (installed GRUB: menu + kernel on ttyS0) --------
+sed -i 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8"|' \
+	/target/etc/default/grub
+grep -q '^GRUB_TERMINAL=' /target/etc/default/grub || \
+	printf 'GRUB_TERMINAL="console serial"\n' >> /target/etc/default/grub
+grep -q '^GRUB_SERIAL_COMMAND=' /target/etc/default/grub || \
+	printf 'GRUB_SERIAL_COMMAND="serial --unit=0 --speed=115200 --word=8 --parity=no --stop=1"\n' \
+		>> /target/etc/default/grub
+# in-target binds /proc, /sys and /dev before chrooting — update-grub needs them
+# for device discovery.
+in-target update-grub
+
+# Serial-console root login (recovery path; /etc/securetty may not exist on newer
+# util-linux — absent means unrestricted).
+if [ -f /target/etc/securetty ] && ! grep -q '^ttyS0$' /target/etc/securetty; then
+	printf 'ttyS0\n' >> /target/etc/securetty
+fi
+
+echo "AxonWall: installed system configured"

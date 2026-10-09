@@ -1,0 +1,122 @@
+#_preseed_V1
+# AxonWall unattended install-to-disk preseed — wave-1 acceptance criterion 3
+# (spec art_mxHM10hO): "Install-to-disk via preseed completes unattended and the
+# installed system reboots into the same firewall state, with /config on its own
+# persistent partition."
+#
+# Wiring (grounded in live-build 1:20250505+deb13u1, read this session):
+#   - config/preseed/*.cfg.installer is concatenated by installer_preseed into
+#     binary/install/preseed.cfg. The ".cfg.installer" suffix keeps this OUT of
+#     the live chroot's debconf (chroot_preseed only consumes *.cfg / *.cfg.chroot).
+#   - auto/config passes --debian-installer-preseedfile preseed.cfg, so every
+#     installer boot entry carries file=/cdrom/install/preseed.cfg.
+#   - auto/config passes --bootappend-install "auto=true priority=critical
+#     console=tty0 console=ttyS0,115200n8", so ANY installer menu entry (not just
+#     "Automated install") boots a preseeded, serial-speaking installer.
+#
+# Patterns follow the official trixie example preseed
+# (https://www.debian.org/releases/trixie/example-preseed.txt).
+#
+# NOTE: the root credential below is a PUBLIC bootstrap password for serial-console
+# recovery only. SSH is key-only (hardening drop-in), and credential rotation is
+# first-boot-setup work that lands with axond. Do not put anything secret here.
+
+d-i debian-installer/locale string en_US.UTF-8
+d-i keyboard-configuration/xkb-keymap select us
+d-i console-setup/ask_detect boolean false
+
+d-i netcfg/choose_interface select auto
+# QEMU/bare-metal DHCP carries no hostname; force the appliance name.
+# (configure-installed.sh rewrites /etc/hostname and /etc/hosts deterministically.)
+d-i netcfg/get_hostname string axonwall
+d-i netcfg/get_domain string unassigned-domain
+
+# Non-free-firmware debs live inside the live squashfs, not the d-i pool; this is
+# a no-op today and correct if firmware udebs are ever added to the medium.
+d-i hw-detect/load_firmware boolean true
+
+# Network mirror for the installed system (build-time pinning lives in auto/config).
+d-i mirror/country string manual
+d-i mirror/http/hostname string deb.debian.org
+d-i mirror/http/directory string /debian
+d-i mirror/http/proxy string
+d-i apt-setup/use_mirror boolean true
+# The ISO carries no deb pool — never scan the medium as an apt source.
+d-i apt-setup/cdrom/set-first boolean false
+d-i apt-setup/disable-cdrom-entries boolean true
+d-i apt-setup/non-free-firmware boolean true
+
+# Root-only account (no user account on an appliance).
+d-i passwd/root-login boolean true
+d-i passwd/make-user boolean false
+# crypt(3) SHA-512 of the bootstrap password documented in build/README.md.
+d-i passwd/root-password-crypted string $6$NC0msg7ssMbkC4Mx$BaOrDUrEl4d5cvZ5QfTojsu6.2k7pWtqmET3flFgZTPuRLZDdOzNZcfVdVOtUJe696io2176pGbx8F90/FH/x0
+
+d-i clock-setup/utc boolean true
+d-i time/zone string UTC
+d-i clock-setup/ntp boolean true
+
+d-i popularity-contest/participate boolean false
+
+# Packages: the appliance set (build/livebuild/config/package-lists/axonwall.list.chroot
+# minus live-only packages). No upgrade pass during install — post-install
+# security drift is unattended-upgrades territory (lifecycle work), and pinning
+# is handled at build time.
+d-i pkgsel/include string nftables dnsmasq unbound wireguard-tools openssh-server conntrack iproute2 ca-certificates curl git less
+d-i pkgsel/upgrade select none
+
+# --- Partitioning: GPT, BIOS boot + ESP, /boot, /, swap (/config lands with the
+# --- /config partition-layout commit).
+d-i partman-auto/method string regular
+# GPT: one label for both firmware paths (BIOS boots via a BIOS boot partition).
+d-i partman-partitioning/default_label string gpt
+d-i partman-auto/expert_recipe string \
+	axonscheme :: \
+	1 1 1 free \
+		$bios_boot{ } \
+		method{ biosgrub } \
+	. \
+	538 538 1075 free \
+		$iflabel{ gpt } \
+		$reusemount{ } \
+		method{ efi } \
+		format{ } \
+		mountpoint{ /boot/efi } \
+	. \
+	512 512 1024 ext4 \
+		method{ format } format{ } \
+		use_filesystem{ } filesystem{ ext4 } \
+		mountpoint{ /boot } \
+	. \
+	2048 4096 8192 ext4 \
+		method{ format } format{ } \
+		use_filesystem{ } filesystem{ ext4 } \
+		mountpoint{ / } \
+	. \
+	512 512 512 linux-swap \
+		method{ swap } format{ } \
+	.
+
+# Stale LVM/MD on a re-used disk must not stop the unattended run.
+d-i partman-lvm/device_remove_lvm boolean true
+d-i partman-md/device_remove_md boolean true
+d-i partman-lvm/confirm boolean true
+d-i partman-lvm/confirm_nooverwrite boolean true
+
+# Answer every partitioner confirmation (wipe the target disk without prompting).
+d-i partman/confirm_write_new_label boolean true
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+
+# The installed system speaks on the serial console too (belt and suspenders —
+# configure-installed.sh enforces the same via /etc/default/grub + update-grub).
+d-i debian-installer/add-kernel-opts string console=tty0 console=ttyS0,115200n8
+
+d-i grub-installer/only_debian boolean true
+d-i grub-installer/with_other_os boolean false
+
+d-i finish-install/reboot_in_progress note
+
+# Installed-system configuration: same firewall state as the live image.
+d-i preseed/late_command string sh /cdrom/axonwall/installed-system/configure-installed.sh
