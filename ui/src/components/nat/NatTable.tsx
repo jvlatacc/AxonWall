@@ -11,37 +11,52 @@ export interface NatTableProps {
   readonly disabled?: boolean
 }
 
+// Summary of one NAT rule for the table: what it matches and where it sends
+// traffic, per mode.
+function ruleDetail(rule: NatRule): string {
+  if (rule.mode === 'masquerade') {
+    return `${rule.source} → ${rule.out}`
+  }
+  const target = rule.to.includes(':') ? rule.to : `${rule.to}:${rule.dstPort}`
+  return `${rule.in} :${rule.dstPort}/${rule.proto} → ${target}`
+}
+
+function ruleDetailHeader(rule: NatRule): string {
+  return rule.mode === 'masquerade' ? 'Source zone → out interface' : 'Ingress interface, public port → internal target'
+}
+
 export function NatTable({ rules, onEdit, onDelete, disabled = false }: NatTableProps): ReactElement {
   if (rules.length === 0) {
     return (
       <EmptyState
         title="No NAT rules defined"
-        hint="Add a masquerade rule for a zone to reach the internet."
+        hint="Add a masquerade rule for a zone to reach the internet, or a port-forward to expose a service."
       />
     )
   }
+  const showActions = onEdit !== undefined || onDelete !== undefined
   return (
     <div className="axw-table-wrap">
       <table className="axw-table">
         <thead>
           <tr>
             <th>Name</th>
-            <th>Out interface</th>
-            <th>Source zone</th>
             <th>Mode</th>
-            {(onEdit !== undefined || onDelete !== undefined) && <th aria-label="Actions" />}
+            <th>Match → target</th>
+            {showActions && <th aria-label="Actions" />}
           </tr>
         </thead>
         <tbody>
           {rules.map((rule, index) => (
             <tr key={`${rule.name}-${index}`}>
               <td>{rule.name}</td>
-              <td className="axw-mono">{rule.out}</td>
-              <td className="axw-mono">{rule.source}</td>
               <td>
-                <Badge tone="accent">{rule.mode}</Badge>
+                <Badge tone={rule.mode === 'masquerade' ? 'accent' : 'neutral'}>{rule.mode}</Badge>
               </td>
-              {(onEdit !== undefined || onDelete !== undefined) && (
+              <td className="axw-mono" title={ruleDetailHeader(rule)}>
+                {ruleDetail(rule)}
+              </td>
+              {showActions && (
                 <td>
                   <div className="axw-row-actions">
                     {onEdit !== undefined && (

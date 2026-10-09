@@ -103,30 +103,48 @@ describe('validateRule', () => {
 
 describe('validateAlias', () => {
   it('accepts a valid ipv4 alias', () => {
-    expect(validateAlias({ name: 'web-hosts', type: 'ipv4', entries: ['192.168.1.5', '10.0.0.0/8'] }, [])).toEqual({})
+    expect(validateAlias({ name: 'web-hosts', type: 'ipv4', url: '', entries: ['192.168.1.5', '10.0.0.0/8'] }, [])).toEqual({})
   })
 
   it('rejects an empty entries list', () => {
-    expect(validateAlias({ name: 'web-hosts', type: 'ipv4', entries: [] }, [])).toMatchObject({
+    expect(validateAlias({ name: 'web-hosts', type: 'ipv4', url: '', entries: [] }, [])).toMatchObject({
       entries: 'at least one entry is required',
     })
   })
 
   it('rejects an ipv6 entry in an ipv4 alias', () => {
-    expect(validateAlias({ name: 'web-hosts', type: 'ipv4', entries: ['::1'] }, [])).toMatchObject({
+    expect(validateAlias({ name: 'web-hosts', type: 'ipv4', url: '', entries: ['::1'] }, [])).toMatchObject({
       entries: expect.stringContaining('not an IPv4'),
     })
   })
 
   it('rejects duplicate names', () => {
-    expect(validateAlias({ name: 'admin-hosts', type: 'ipv4', entries: ['192.168.1.5'] }, ['admin-hosts'])).toMatchObject({
+    expect(
+      validateAlias({ name: 'admin-hosts', type: 'ipv4', url: '', entries: ['192.168.1.5'] }, ['admin-hosts']),
+    ).toMatchObject({
       name: 'duplicate alias name "admin-hosts"',
+    })
+  })
+
+  it('accepts a url-table alias with a feed URL and no entries', () => {
+    expect(validateAlias({ name: 'blocklist', type: 'url-table', url: 'https://example.com/feed.txt', entries: [] }, [])).toEqual({})
+  })
+
+  it('rejects a url-table alias without a feed URL', () => {
+    expect(validateAlias({ name: 'blocklist', type: 'url-table', url: '', entries: [] }, [])).toMatchObject({
+      url: 'feed URL must be set',
+    })
+  })
+
+  it('rejects a non-http feed URL', () => {
+    expect(validateAlias({ name: 'blocklist', type: 'url-table', url: 'ftp://example.com/feed.txt', entries: [] }, [])).toMatchObject({
+      url: 'must be an absolute http(s) URL',
     })
   })
 })
 
 describe('validateNat', () => {
-  const valid = { name: 'lan-masq', out: 'wan0', source: 'lan', mode: 'masquerade' } as const
+  const valid = { name: 'lan-masq', out: 'wan0', source: 'lan', mode: 'masquerade', in: '', proto: '', dstPort: '', to: '' } as const
 
   it('accepts a valid masquerade rule', () => {
     expect(validateNat({ ...valid }, ctx, [])).toEqual({})
@@ -141,7 +159,51 @@ describe('validateNat', () => {
   })
 
   it('rejects a missing mode', () => {
-    expect(validateNat({ ...valid, mode: '' }, ctx, [])).toMatchObject({ mode: 'mode must be masquerade' })
+    expect(validateNat({ ...valid, mode: '' }, ctx, [])).toMatchObject({ mode: 'mode must be masquerade or port-forward' })
+  })
+
+  it('accepts a valid port-forward rule', () => {
+    expect(
+      validateNat(
+        { name: 'web-fwd', mode: 'port-forward', out: '', source: '', in: 'wan0', proto: 'tcp', dstPort: '8080', to: '192.168.1.50:80' },
+        ctx,
+        [],
+      ),
+    ).toEqual({})
+  })
+
+  it('rejects a port-forward with an unknown ingress interface', () => {
+    expect(
+      validateNat(
+        { name: 'web-fwd', mode: 'port-forward', out: '', source: '', in: 'wan9', proto: 'tcp', dstPort: '8080', to: '192.168.1.50' },
+        ctx,
+        [],
+      ),
+    ).toMatchObject({ in: 'unknown interface "wan9"' })
+  })
+
+  it('rejects a port-forward with an invalid target', () => {
+    expect(
+      validateNat(
+        { name: 'web-fwd', mode: 'port-forward', out: '', source: '', in: 'wan0', proto: 'tcp', dstPort: '8080', to: 'example.com' },
+        ctx,
+        [],
+      ),
+    ).toMatchObject({ to: 'must be an IPv4 address or ip:port' })
+  })
+
+  it('rejects a port-forward with a bare port range value', () => {
+    expect(
+      validateNat(
+        { name: 'web-fwd', mode: 'port-forward', out: '', source: '', in: 'wan0', proto: 'udp', dstPort: '0', to: '192.168.1.50' },
+        ctx,
+        [],
+      ),
+    ).toMatchObject({ dstPort: 'must be between 1 and 65535' })
+  })
+
+  it('rejects mode-crossed field sets', () => {
+    expect(validateNat({ ...valid, in: 'wan0' }, ctx, [])).toMatchObject({ form: 'port-forward fields belong to port-forward mode' })
   })
 })
 

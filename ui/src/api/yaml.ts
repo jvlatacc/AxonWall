@@ -32,7 +32,12 @@ interface YamlDoc {
     address?: string[]
   }[]
   services?: {
-    dns?: { resolver: string; listen: string[] }
+    dns?: {
+      resolver: string
+      listen: string[]
+      mode?: string
+      forwarders?: string[]
+    }
     dhcp?: {
       pools: { zone: string; range: [string, string]; gateway: string; dns: string }[]
     }
@@ -43,8 +48,8 @@ interface YamlDoc {
   }
   firewall: {
     default: { input: string; forward: string; output: string }
-    aliases: Record<string, { type: string; entries: string[] }>
-    nat: { name: string; out: string; source: string; mode: string }[]
+    aliases: Record<string, { type: string; url?: string; entries: string[] }>
+    nat: (MasqueradeYaml | PortForwardYaml)[]
     rules: {
       name: string
       from: string
@@ -54,6 +59,22 @@ interface YamlDoc {
       verdict: string
     }[]
   }
+}
+
+interface MasqueradeYaml {
+  name: string
+  mode: 'masquerade'
+  out: string
+  source: string
+}
+
+interface PortForwardYaml {
+  name: string
+  mode: 'port-forward'
+  in: string
+  proto: string
+  'dst-port': number
+  to: string
 }
 
 export function configToYaml(config: AxonWallConfig): string {
@@ -70,14 +91,21 @@ export function configToYaml(config: AxonWallConfig): string {
       default: { ...config.firewall.default },
       aliases: mapValues(config.firewall.aliases, (a) => ({
         type: a.type,
+        ...(a.url !== undefined && a.url !== '' ? { url: a.url } : {}),
         entries: [...a.entries],
       })),
-      nat: config.firewall.nat.map((n) => ({
-        name: n.name,
-        out: n.out,
-        source: n.source,
-        mode: n.mode,
-      })),
+      nat: config.firewall.nat.map((n) =>
+        n.mode === 'masquerade'
+          ? { name: n.name, mode: n.mode, out: n.out, source: n.source }
+          : {
+              name: n.name,
+              mode: n.mode,
+              in: n.in,
+              proto: n.proto,
+              'dst-port': n.dstPort,
+              to: n.to,
+            },
+      ),
       rules: config.firewall.rules.map((r) => ({
         name: r.name,
         from: r.from,
@@ -91,9 +119,17 @@ export function configToYaml(config: AxonWallConfig): string {
     },
   }
   if (config.services?.dns !== undefined) {
+    const dns = config.services.dns
     doc.services = {
       ...doc.services,
-      dns: { resolver: config.services.dns.resolver, listen: [...config.services.dns.listen] },
+      dns: {
+        resolver: dns.resolver,
+        listen: [...dns.listen],
+        ...(dns.mode !== undefined ? { mode: dns.mode } : {}),
+        ...(dns.forwarders !== undefined && dns.forwarders.length > 0
+          ? { forwarders: [...dns.forwarders] }
+          : {}),
+      },
     }
   }
   if (config.services?.dhcp !== undefined) {
@@ -168,14 +204,19 @@ export function configFromYaml(text: string): AxonWallConfig {
 
   const firewallRaw = asRecord(doc['firewall'] ?? {}, 'firewall')
   const aliasesRaw = asRecord(firewallRaw['aliases'] ?? {}, 'firewall.aliases')
-  const aliases: Record<string, { type: AliasType; entries: string[] }> = {}
+  const aliases: Record<string, { type: AliasType; url?: string; entries: string[] }> = {}
   for (const [name, value] of Object.entries(aliasesRaw)) {
     const alias = asRecord(value, `firewall.aliases.${name}`)
     const type = alias['type']
-    if (type !== 'ipv4' && type !== 'ipv6') {
-      throw new Error(`firewall.aliases.${name}: type must be ipv4 or ipv6`)
+    if (type !== 'ipv4' && type !== 'ipv6' && type !== 'url-table') {
+      throw new Error(`firewall.aliases.${name}: type must be ipv4, ipv6, or url-table`)
     }
-    aliases[name] = { type: type as AliasType, entries: stringList(alias['entries'], `firewall.aliases.${name}.entries`) }
+    const url = alias['url'] === undefined ? undefined : expectString(alias['url'], `firewall.aliases.${name}.url`)
+    aliases[name] = {
+      type: type as AliasType,
+      ...(url !== undefined ? { url } : {}),
+      entries: stringList(alias['entries'], `firewall.aliases.${name}.entries`),
+    }
   }
 
   return {
@@ -209,7 +250,17 @@ function servicesFromYaml(raw: unknown): Services | undefined {
 function dnsFromYaml(raw: unknown): DnsService | undefined {
   if (raw === undefined || raw === null) return undefined
   const d = asRecord(raw, 'services.dns')
-  return { resolver: 'unbound', listen: stringList(d['listen'], 'services.dns.listen') }
+  const mode = d['mode']
+  if (mode !== undefined && mode !== 'recursive' && mode !== 'forward') {
+    throw new Error('services.dns.mode: must be recursive or forward')
+  }
+  const forwarders = d['forwarders'] === undefined ? undefined : stringList(d['forwarders'], 'services.dns.forwarders')
+  return {
+    resolver: 'unbound',
+    listen: stringList(d['listen'], 'services.dns.listen'),
+    ...(mode !== undefined ? { mode } : {}),
+    ...(forwarders !== undefined ? { forwarders } : {}),
+  }
 }
 
 function dhcpFromYaml(raw: unknown): DhcpService | undefined {
@@ -263,14 +314,31 @@ function natFromYaml(raw: unknown): NatRule[] {
   if (!Array.isArray(raw)) return []
   return raw.map((entry, i) => {
     const n = asRecord(entry, `firewall.nat[${i}]`)
-    if (n['mode'] !== 'masquerade') {
-      throw new Error(`firewall.nat[${i}]: mode must be masquerade`)
-    }
-    return {
-      name: expectString(n['name'], `firewall.nat[${i}].name`),
-      out: expectString(n['out'], `firewall.nat[${i}].out`),
-      source: expectString(n['source'], `firewall.nat[${i}].source`),
-      mode: 'masquerade',
+    const field = `firewall.nat[${i}]`
+    switch (n['mode']) {
+      case 'masquerade':
+        return {
+          name: expectString(n['name'], `${field}.name`),
+          mode: 'masquerade' as const,
+          out: expectString(n['out'], `${field}.out`),
+          source: expectString(n['source'], `${field}.source`),
+        }
+      case 'port-forward': {
+        const proto = n['proto']
+        if (proto !== 'tcp' && proto !== 'udp') {
+          throw new Error(`${field}.proto: must be tcp or udp`)
+        }
+        return {
+          name: expectString(n['name'], `${field}.name`),
+          mode: 'port-forward' as const,
+          in: expectString(n['in'], `${field}.in`),
+          proto,
+          dstPort: expectNumber(n['dst-port'], `${field}.dst-port`),
+          to: expectString(n['to'], `${field}.to`),
+        }
+      }
+      default:
+        throw new Error(`${field}.mode: must be masquerade or port-forward`)
     }
   })
 }

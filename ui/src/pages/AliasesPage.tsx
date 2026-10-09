@@ -34,6 +34,7 @@ export function AliasesPage({ config, saving, onChange }: AliasesPageProps): Rea
     onChange(
       upsertAlias(config, previousName, values.name.trim(), {
         type: values.type,
+        ...(values.type === 'url-table' && values.url.trim() !== '' ? { url: values.url.trim() } : {}),
         entries: values.entries,
       }),
     )
@@ -71,7 +72,12 @@ export function AliasesPage({ config, saving, onChange }: AliasesPageProps): Rea
       {editor.kind === 'edit' && editAlias !== undefined && (
         <Card title={`Edit alias: ${editName}`}>
           <AliasEditorForm
-            initial={{ name: editName ?? '', type: editAlias.type, entries: editAlias.entries }}
+            initial={{
+              name: editName ?? '',
+              type: editAlias.type,
+              url: editAlias.url ?? '',
+              entries: editAlias.entries,
+            }}
             takenNames={takenNames}
             disabled={saving}
             onCancel={() => setEditor({ kind: 'closed' })}

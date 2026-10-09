@@ -9,7 +9,8 @@ import type {
   AliasType,
   AxonWallConfig,
   DhcpPool,
-  NatMode,
+  DnsMode,
+  NatRule,
   PolicyAction,
   Verdict,
 } from '../api/types'
@@ -25,9 +26,10 @@ export const MATCH_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9.:@_-]{0,30}$/
 
 export const VALID_POLICIES: readonly PolicyAction[] = ['accept', 'drop']
 export const VALID_VERDICTS: readonly Verdict[] = ['accept', 'drop', 'reject']
-export const VALID_ALIAS_TYPES: readonly AliasType[] = ['ipv4', 'ipv6']
+export const VALID_ALIAS_TYPES: readonly AliasType[] = ['ipv4', 'ipv6', 'url-table']
 export const VALID_ADDRESSING: readonly ('dhcp' | 'static')[] = ['dhcp', 'static']
-export const VALID_NAT_MODES: readonly NatMode[] = ['masquerade']
+export const VALID_NAT_MODES: readonly ('masquerade' | 'port-forward')[] = ['masquerade', 'port-forward']
+export const VALID_DNS_MODES: readonly DnsMode[] = ['recursive', 'forward']
 
 /** Named services wave 1 understands (validate.go: namedServices). */
 const NAMED_SERVICES: readonly string[] = ['ssh', 'http', 'https', 'dns']
@@ -38,6 +40,34 @@ export function isValidConfigName(name: string): boolean {
 
 export function isValidKernelDevice(name: string): boolean {
   return MATCH_PATTERN.test(name)
+}
+
+/** An absolute http(s) URL for a url-table alias feed (validate.go alias URL check). */
+export function isValidFeedUrl(value: string): boolean {
+  try {
+    const u = new URL(value)
+    return (u.protocol === 'http:' || u.protocol === 'https:') && u.hostname !== ''
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A port-forward destination: an IPv4 address or ip:port, mirroring
+ * config.go ParsePortForwardTarget (IPv6 targets are later work).
+ */
+export function isValidPortForwardTarget(value: string): boolean {
+  const trimmed = value.trim()
+  const lastColon = trimmed.lastIndexOf(':')
+  if (lastColon < 0) {
+    return parseIp(trimmed)?.family === 4
+  }
+  const host = trimmed.slice(0, lastColon)
+  const port = trimmed.slice(lastColon + 1)
+  if (!/^\d{1,5}$/.test(port)) return false
+  const n = Number(port)
+  if (n < 1 || n > 65535) return false
+  return parseIp(host)?.family === 4
 }
 
 /**
@@ -151,10 +181,12 @@ export function validateRule(
 export interface AliasValues {
   readonly name: string
   readonly type: AliasType
+  /** Feed source, url-table only (yaml: url). */
+  readonly url: string
   readonly entries: readonly string[]
 }
 
-export type AliasErrors = Partial<Record<'name' | 'type' | 'entries', string>>
+export type AliasErrors = Partial<Record<'name' | 'type' | 'url' | 'entries', string>>
 
 export function validateAlias(
   values: AliasValues,
@@ -166,20 +198,29 @@ export function validateAlias(
   else if (!isValidConfigName(name)) errors.name = 'must be lowercase letters, digits, dashes (max 32)'
   else if (takenNames.includes(name)) errors.name = `duplicate alias name "${name}"`
 
-  if (!VALID_ALIAS_TYPES.includes(values.type)) errors.type = 'type must be ipv4 or ipv6'
+  if (!VALID_ALIAS_TYPES.includes(values.type)) errors.type = 'type must be ipv4, ipv6, or url-table'
 
-  if (values.entries.length === 0) {
+  if (values.type === 'url-table') {
+    // The feed refresh populates the set; entries are an optional seed
+    // (validate.go: url-table skips the at-least-one-entry rule).
+    if (values.url.trim() === '') errors.url = 'feed URL must be set'
+    else if (!isValidFeedUrl(values.url.trim())) errors.url = 'must be an absolute http(s) URL'
+    if (values.entries.length === 0) return errors
+  }
+
+  if (values.entries.length === 0 && values.type !== 'url-table') {
     errors.entries = 'at least one entry is required'
   } else {
+    const entryFamily = values.type === 'url-table' ? 'ipv4' : values.type
     const problems = values.entries
-      .map((entry, i) => aliasEntryProblem(values.type, entry.trim(), i))
+      .map((entry, i) => aliasEntryProblem(entryFamily, entry.trim(), i))
       .filter((problem): problem is string => problem !== null)
     if (problems.length > 0) errors.entries = problems.join('; ')
   }
   return errors
 }
 
-function aliasEntryProblem(type: AliasType, entry: string, index: number): string | null {
+function aliasEntryProblem(type: 'ipv4' | 'ipv6', entry: string, index: number): string | null {
   if (entry === '') return `entry ${index + 1} is empty`
   const ip = parseIp(entry)
   if (ip !== null) {
@@ -198,13 +239,26 @@ function aliasEntryProblem(type: AliasType, entry: string, index: number): strin
 
 export interface NatValues {
   readonly name: string
+  readonly mode: NatMode | ''
+  // masquerade fields
   readonly out: string
   readonly source: string
-  readonly mode: NatMode | ''
+  // port-forward fields
+  readonly in: string
+  readonly proto: 'tcp' | 'udp' | ''
+  readonly dstPort: string
+  readonly to: string
 }
 
-export type NatErrors = Partial<Record<keyof NatValues, string>>
+export type NatMode = (typeof VALID_NAT_MODES)[number]
 
+export type NatErrors = Partial<Record<keyof NatValues | 'form', string>>
+
+/**
+ * Validate one NAT rule, mirroring checkNAT: the two modes have disjoint
+ * field sets, so a typo lands as an error instead of a silently ignored
+ * field.
+ */
 export function validateNat(
   values: NatValues,
   ctx: ValidationContext,
@@ -216,14 +270,58 @@ export function validateNat(
   else if (!isValidConfigName(name)) errors.name = 'must be lowercase letters, digits, dashes (max 32)'
   else if (takenNames.includes(name)) errors.name = `duplicate NAT rule name "${name}"`
 
-  if (values.out === '') errors.out = 'must be set'
-  else if (!ctx.interfaceNames.includes(values.out)) errors.out = `unknown interface "${values.out}"`
+  if (!VALID_NAT_MODES.includes(values.mode as NatMode)) errors.mode = 'mode must be masquerade or port-forward'
 
-  if (values.source === '') errors.source = 'must be set'
-  else if (!ctx.zoneNames.includes(values.source)) errors.source = `unknown zone "${values.source}"`
+  if (values.mode === 'port-forward') {
+    if (values.out !== '' || values.source !== '') {
+      errors.form = 'out and source belong to masquerade mode'
+    }
+    if (values.in === '') errors.in = 'must be set'
+    else if (!ctx.interfaceNames.includes(values.in)) errors.in = `unknown interface "${values.in}"`
 
-  if (!VALID_NAT_MODES.includes(values.mode as NatMode)) errors.mode = 'mode must be masquerade'
+    if (values.proto === '') errors.proto = 'must be tcp or udp'
+    const port = Number(values.dstPort)
+    if (!/^\d{1,5}$/.test(values.dstPort) || port < 1 || port > 65535) {
+      errors.dstPort = 'must be between 1 and 65535'
+    }
+    if (values.to.trim() === '') errors.to = 'must be set'
+    else if (!isValidPortForwardTarget(values.to)) errors.to = 'must be an IPv4 address or ip:port'
+  } else if (values.mode === 'masquerade') {
+    if (values.in !== '' || values.proto !== '' || values.dstPort !== '' || values.to !== '') {
+      errors.form = 'port-forward fields belong to port-forward mode'
+    }
+    if (values.out === '') errors.out = 'must be set'
+    else if (!ctx.interfaceNames.includes(values.out)) errors.out = `unknown interface "${values.out}"`
+
+    if (values.source === '') errors.source = 'must be set'
+    else if (!ctx.zoneNames.includes(values.source)) errors.source = `unknown zone "${values.source}"`
+  }
   return errors
+}
+
+/**
+ * Construct the typed NAT rule from form values; null when the mode is
+ * unset or the port-forward fields are malformed. validateNat reports the
+ * errors, this builds the rule the store accepts.
+ */
+export function natRuleFromValues(values: NatValues): NatRule | null {
+  const name = values.name.trim()
+  if (values.mode === 'masquerade') {
+    return { name, mode: 'masquerade', out: values.out, source: values.source }
+  }
+  if (values.mode === 'port-forward') {
+    const port = Number(values.dstPort)
+    if (values.proto === '' || !Number.isInteger(port) || port < 1 || port > 65535) return null
+    return {
+      name,
+      mode: 'port-forward',
+      in: values.in,
+      proto: values.proto,
+      dstPort: port,
+      to: values.to.trim(),
+    }
+  }
+  return null
 }
 
 // -- DHCP pool form -----------------------------------------------------------

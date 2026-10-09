@@ -14,10 +14,11 @@ export type Verdict = PolicyAction | 'reject'
 
 export type Addressing = 'dhcp' | 'static'
 
-export type AliasType = 'ipv4' | 'ipv6'
+/** Alias kinds; url-table names a feed URL the appliance refreshes. */
+export type AliasType = 'ipv4' | 'ipv6' | 'url-table'
 
-/** Wave 1 supports source NAT via masquerade only. */
-export type NatMode = 'masquerade'
+/** DNS resolver mode: full recursion or forwarding to upstream resolvers. */
+export type DnsMode = 'recursive' | 'forward'
 
 /** Service schema version this UI understands (config.go: Version). */
 export const SCHEMA_VERSION = 1
@@ -60,6 +61,10 @@ export interface Services {
 export interface DnsService {
   readonly resolver: 'unbound'
   readonly listen: readonly string[]
+  /** Defaults to recursive when absent (yaml: mode). */
+  readonly mode?: DnsMode
+  /** Upstream resolver IPs; forward mode only (yaml: forwarders). */
+  readonly forwarders?: readonly string[]
 }
 
 /** DHCP pools (yaml: services.dhcp). */
@@ -106,18 +111,36 @@ export interface DefaultPolicies {
 
 export interface Alias {
   readonly type: AliasType
+  /** Feed source, url-table only (yaml: url). */
+  readonly url?: string
   readonly entries: readonly string[]
 }
 
-/** Source-NAT rule (yaml: firewall.nat). */
-export interface NatRule {
+/** Source-NAT rule (yaml: firewall.nat) — masquerade mode. */
+export interface MasqueradeRule {
   readonly name: string
-  /** Logical interface name (yaml: out). */
+  readonly mode: 'masquerade'
+  /** Logical egress interface name (yaml: out). */
   readonly out: string
-  /** Zone name (yaml: source). */
+  /** Source zone (yaml: source). */
   readonly source: string
-  readonly mode: NatMode
 }
+
+/** DNAT rule forwarding a public port to an internal host — port-forward mode. */
+export interface PortForwardRule {
+  readonly name: string
+  readonly mode: 'port-forward'
+  /** Logical ingress interface name (yaml: in). */
+  readonly in: string
+  readonly proto: 'tcp' | 'udp'
+  /** Public port, 1-65535 (yaml: dst-port). */
+  readonly dstPort: number
+  /** Internal `ip` or `ip:port` (yaml: to). */
+  readonly to: string
+}
+
+/** NAT rule; the two modes have disjoint fields (config.go: NATRule). */
+export type NatRule = MasqueradeRule | PortForwardRule
 
 /** Firewall rule between zones, or the `firewall` pseudo-zone (yaml: firewall.rules). */
 export interface FirewallRule {
@@ -196,4 +219,16 @@ export interface SystemStatus {
   readonly services: readonly ServiceStatus[]
   readonly states: readonly FirewallStateEntry[]
   readonly log: readonly LogEntry[]
+}
+
+/** Kernel network device offered to the first-boot wizard (GET /net/devices). */
+export interface NetDevice {
+  readonly name: string
+  readonly mac: string
+  readonly up: boolean
+}
+
+/** First-boot setup marker (GET /setup, POST /setup/complete). */
+export interface SetupState {
+  readonly required: boolean
 }

@@ -28,8 +28,10 @@ function textToEntries(text: string): string[] {
     .filter((line) => line !== '')
 }
 
+const BLANK: AliasValues = { name: '', type: 'ipv4', url: '', entries: [] }
+
 export function AliasEditorForm({
-  initial = { name: '', type: 'ipv4', entries: [] },
+  initial = BLANK,
   takenNames,
   onSave,
   onCancel,
@@ -50,7 +52,7 @@ export function AliasEditorForm({
 
   const submit = (): void => {
     setSubmitted(true)
-    const next: AliasValues = { ...values, entries: textToEntries(entriesText) }
+    const next: AliasValues = { ...values, url: values.url.trim(), entries: textToEntries(entriesText) }
     const found = validateWith(next)
     setErrors(found)
     if (Object.keys(found).length > 0) return
@@ -79,13 +81,26 @@ export function AliasEditorForm({
           options={[
             { value: 'ipv4', label: 'ipv4' },
             { value: 'ipv6', label: 'ipv6' },
+            { value: 'url-table', label: 'url-table (feed)' },
           ]}
           onChange={(type) => update({ type: type as AliasType })}
           error={errors.type}
         />
+        {values.type === 'url-table' && (
+          <div className="axw-field-span">
+            <TextField
+              label="Feed URL"
+              value={values.url}
+              onChange={(url) => update({ url })}
+              error={errors.url}
+              hint="Absolute http(s) URL listing one address or CIDR per line; refreshed by the appliance"
+              placeholder="https://example.com/feed.txt"
+            />
+          </div>
+        )}
         <div className="axw-field-span">
           <TextAreaField
-            label="Entries"
+            label={values.type === 'url-table' ? 'Seed entries (optional)' : 'Entries'}
             value={entriesText}
             rows={4}
             onChange={(text) => {
@@ -95,7 +110,11 @@ export function AliasEditorForm({
               }
             }}
             error={errors.entries}
-            hint="One address or CIDR per line, matching the selected type"
+            hint={
+              values.type === 'url-table'
+                ? 'Optional initial addresses; the feed refresh replaces them'
+                : 'One address or CIDR per line, matching the selected type'
+            }
             placeholder={'192.168.1.10\n192.168.1.0/24'}
             mono
           />
