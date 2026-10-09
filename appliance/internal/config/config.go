@@ -97,8 +97,8 @@ type Zone struct {
 type Interface struct {
 	Name       string   `yaml:"name"`
 	Match      string   `yaml:"match"`
-	Addressing string   `yaml:"addressing"` // dhcp | static
-	Address    []string `yaml:"address"`    // CIDRs; static only
+	Addressing string   `yaml:"addressing"`        // dhcp | static
+	Address    []string `yaml:"address,omitempty"` // CIDRs; static only
 }
 
 // Services holds the optional service sections. Section presence matters
@@ -107,7 +107,7 @@ type Interface struct {
 type Services struct {
 	DNS       *DNS       `yaml:"dns"`
 	DHCP      *DHCP      `yaml:"dhcp"`
-	WireGuard *WireGuard `yaml:"wireguard"`
+	WireGuard *WireGuard `yaml:"wireguard,omitempty"`
 }
 
 // DNS configures the resolver (Unbound in wave 1) and the zones it listens on.
@@ -116,8 +116,8 @@ type Services struct {
 type DNS struct {
 	Resolver   string   `yaml:"resolver"`
 	Listen     []string `yaml:"listen"`
-	Mode       string   `yaml:"mode"`       // recursive (default) | forward
-	Forwarders []string `yaml:"forwarders"` // upstream resolver IPs; forward mode only
+	Mode       string   `yaml:"mode,omitempty"`       // recursive (default) | forward
+	Forwarders []string `yaml:"forwarders,omitempty"` // upstream resolver IPs; forward mode only
 }
 
 // DHCP configures DHCP server pools.
@@ -171,9 +171,9 @@ type Defaults struct {
 // URL-table sets are IPv4 — the wave-1 feed format and the common blocklist
 // case; IPv6 feeds are later work.
 type Alias struct {
-	Type    string   `yaml:"type"` // ipv4 | ipv6 | url-table
-	URL     string   `yaml:"url"`  // url-table only: feed source
-	Entries []string `yaml:"entries"`
+	Type    string   `yaml:"type"`          // ipv4 | ipv6 | url-table
+	URL     string   `yaml:"url,omitempty"` // url-table only: feed source
+	Entries []string `yaml:"entries,omitempty"`
 }
 
 // NATRule is a NAT rule. Mode masquerade source-NATs a zone's traffic as it
@@ -183,16 +183,16 @@ type Alias struct {
 // equivalent of OPNsense's filter rule association.
 type NATRule struct {
 	Name   string `yaml:"name"`
-	Out    string `yaml:"out"`    // masquerade: egress interface (logical)
-	Source string `yaml:"source"` // masquerade: source zone
+	Out    string `yaml:"out,omitempty"`    // masquerade: egress interface (logical)
+	Source string `yaml:"source,omitempty"` // masquerade: source zone
 	Mode   string `yaml:"mode"`
 
 	// Port-forward fields (mode: port-forward). Out and Source must be
 	// empty in that mode; the fields above belong to masquerade.
-	In      string `yaml:"in"`       // ingress interface (logical)
-	Proto   string `yaml:"proto"`    // tcp | udp
-	DstPort int    `yaml:"dst-port"` // public port
-	To      string `yaml:"to"`       // internal ip or ip:port (IPv4)
+	In      string `yaml:"in,omitempty"`       // ingress interface (logical)
+	Proto   string `yaml:"proto,omitempty"`    // tcp | udp
+	DstPort int    `yaml:"dst-port,omitempty"` // public port
+	To      string `yaml:"to,omitempty"`       // internal ip or ip:port (IPv4)
 }
 
 // Rule is a firewall rule between zones (or FirewallZone for the appliance
@@ -201,8 +201,8 @@ type Rule struct {
 	Name        string `yaml:"name"`
 	From        string `yaml:"from"`
 	To          string `yaml:"to"`
-	Service     string `yaml:"service"`      // named service or proto/port; empty = any
-	SourceAlias string `yaml:"source-alias"` // optional alias refining From
+	Service     string `yaml:"service,omitempty"`      // named service or proto/port; empty = any
+	SourceAlias string `yaml:"source-alias,omitempty"` // optional alias refining From
 	Verdict     string `yaml:"verdict"`
 }
 
