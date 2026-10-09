@@ -9,6 +9,8 @@ export interface AppShellProps {
   readonly onNavigate: (page: PageId) => void
   readonly theme: Theme
   readonly onToggleTheme: () => void
+  /** Ends the session; omit when the shell is shown without auth. */
+  readonly onSignOut?: () => void
   /** Config revision chip, e.g. "rev-000042". */
   readonly revision?: string
   readonly children: ReactNode
@@ -19,6 +21,7 @@ export function AppShell({
   onNavigate,
   theme,
   onToggleTheme,
+  onSignOut,
   revision,
   children,
 }: AppShellProps): ReactElement {
@@ -49,6 +52,11 @@ export function AppShell({
           <button type="button" className="axw-btn axw-btn-ghost axw-btn-sm" onClick={onToggleTheme}>
             {theme === 'dark' ? 'Light mode' : 'Dark mode'}
           </button>
+          {onSignOut !== undefined && (
+            <button type="button" className="axw-btn axw-btn-ghost axw-btn-sm" onClick={onSignOut}>
+              Sign out
+            </button>
+          )}
           {revision !== undefined && <span className="axw-revision-chip">{revision}</span>}
         </div>
       </aside>
