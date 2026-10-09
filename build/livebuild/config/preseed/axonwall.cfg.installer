@@ -65,8 +65,15 @@ d-i popularity-contest/participate boolean false
 d-i pkgsel/include string nftables dnsmasq unbound wireguard-tools openssh-server conntrack iproute2 ca-certificates curl git less
 d-i pkgsel/upgrade select none
 
-# --- Partitioning: GPT, BIOS boot + ESP, /boot, /, swap (/config lands with the
-# --- /config partition-layout commit).
+# --- Partitioning: GPT, BIOS boot + ESP, /boot, /, swap, dedicated /config.
+# /config is the appliance's persistent store partition (VyOS model): ext4,
+# labelled AXONCONFIG, mounted via fstab LABEL= by configure-installed.sh.
+# A reinstall re-creates this identical layout from the same recipe. Data
+# preservation across a reinstall needs installer lifecycle logic (a
+# partman/early_command pre-copy) — partman-auto's documented "keep" method only
+# reserves unformatted space when creating partitions (partman-auto-recipe.txt
+# §2), it does not reuse an existing partition; deferred with the design noted
+# in build/README.md.
 d-i partman-auto/method string regular
 # GPT: one label for both firmware paths (BIOS boots via a BIOS boot partition).
 d-i partman-partitioning/default_label string gpt

@@ -52,6 +52,24 @@ ff02::1 ip6-allnodes
 ff02::2 ip6-allrouters
 EOF
 
+# --- persistent /config: label + fstab wiring ------------------------------------
+# The recipe formats /config with label AXONCONFIG and mounts it for the install;
+# d-i's fstab line uses UUID. The appliance contract is the LABEL (device names
+# differ per firmware, and the label is what the docs, backup tooling, and the
+# reinstall path key on), so rewrite the line and re-assert the label.
+CFG_DEV="$(awk '$2 == "/target/config" { print $1; exit }' /proc/mounts)"
+if [ -z "$CFG_DEV" ]; then
+	echo "FATAL: no partition mounted at /target/config — /config recipe entry missing" >&2
+	exit 1
+fi
+e2label "$CFG_DEV" AXONCONFIG
+awk '$2 != "/config"' /target/etc/fstab > /target/etc/fstab.axonwall
+# nofail: a missing /config partition must not stop the appliance from booting
+# into its static nftables baseline; axond re-inits an empty store (nofail is
+# deliberate, not laziness).
+printf 'LABEL=AXONCONFIG\t/config\text4\tdefaults,nofail\t0\t2\n' >> /target/etc/fstab.axonwall
+mv /target/etc/fstab.axonwall /target/etc/fstab
+
 # --- serial console persistence (installed GRUB: menu + kernel on ttyS0) --------
 sed -i 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8"|' \
 	/target/etc/default/grub
