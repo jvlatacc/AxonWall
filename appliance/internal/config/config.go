@@ -111,9 +111,13 @@ type Services struct {
 }
 
 // DNS configures the resolver (Unbound in wave 1) and the zones it listens on.
+// Mode recursive (the default) is the DNSSEC-validating recursive resolver;
+// mode forward forwards every query to Forwarders instead.
 type DNS struct {
-	Resolver string   `yaml:"resolver"`
-	Listen   []string `yaml:"listen"`
+	Resolver   string   `yaml:"resolver"`
+	Listen     []string `yaml:"listen"`
+	Mode       string   `yaml:"mode"`       // recursive (default) | forward
+	Forwarders []string `yaml:"forwarders"` // upstream resolver IPs; forward mode only
 }
 
 // DHCP configures DHCP server pools.

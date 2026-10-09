@@ -245,6 +245,23 @@ func (v *validator) checkServices(c *Config, zones map[string]bool, ifn map[stri
 				v.addf("services.dns.listen: unknown zone %q", z)
 			}
 		}
+		switch d.Mode {
+		case "", "recursive":
+			if len(d.Forwarders) > 0 {
+				v.addf("services.dns.forwarders: only allowed in forward mode (mode is %q)", dnsModeOrDefault(d.Mode))
+			}
+		case "forward":
+			if len(d.Forwarders) == 0 {
+				v.addf("services.dns.forwarders: forward mode requires at least one upstream resolver")
+			}
+			for i, f := range d.Forwarders {
+				if net.ParseIP(f) == nil {
+					v.addf("services.dns.forwarders[%d]: invalid IP %q", i, f)
+				}
+			}
+		default:
+			v.addf("services.dns.mode: invalid value %q (one of: recursive, forward)", d.Mode)
+		}
 	}
 	if d := c.Services.DHCP; d != nil {
 		v.checkDHCP(c, d, zones, ifn)
@@ -531,6 +548,15 @@ func parseIP(s string) (net.IP, error) {
 		return nil, fmt.Errorf("invalid IP %q", s)
 	}
 	return ip, nil
+}
+
+// dnsModeOrDefault names the effective DNS mode in messages: an unset mode
+// means recursive.
+func dnsModeOrDefault(mode string) string {
+	if mode == "" {
+		return "recursive"
+	}
+	return mode
 }
 
 // zoneSubnets returns the static subnets of a zone's interfaces.

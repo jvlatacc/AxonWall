@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jvlatacc/AxonWall/appliance/internal/config"
+	"github.com/jvlatacc/AxonWall/appliance/internal/render"
 	"github.com/jvlatacc/AxonWall/appliance/internal/store"
 	"gopkg.in/yaml.v3"
 )
@@ -136,7 +137,7 @@ func TestPipeline_RestoreOnReloadFailure(t *testing.T) {
 	a, readApplied := fakeNft(t)
 	st, _, _ := newTestStore(t)
 	p := NewPipeline(a, nil, &nopHealth{}, st)
-	p.Reload = func(*config.Config) error { return errors.New("reload boom") }
+	p.Reload = func(_ context.Context, _ *render.Rendered) error { return errors.New("reload boom") }
 
 	setDump(t, "table inet known-good {}\n")
 	err := p.Apply(config.Default())

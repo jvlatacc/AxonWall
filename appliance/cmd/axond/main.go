@@ -25,6 +25,7 @@ import (
 	"github.com/jvlatacc/AxonWall/appliance/internal/config"
 	"github.com/jvlatacc/AxonWall/appliance/internal/health"
 	"github.com/jvlatacc/AxonWall/appliance/internal/rollback"
+	"github.com/jvlatacc/AxonWall/appliance/internal/services"
 	"github.com/jvlatacc/AxonWall/appliance/internal/store"
 )
 
@@ -89,7 +90,8 @@ func main() {
 }
 
 // buildPipeline assembles the apply pipeline: the nftables applier, the
-// confirm-or-rollback timer manager, and the post-apply health check
+// confirm-or-rollback timer manager, the service reloader (install rendered
+// daemon configs + reload services), and the post-apply health check
 // against the API listener axond is about to serve.
 func buildPipeline(applier *apply.NftApplier, st *store.Store, apiAddr string) *apply.Pipeline {
 	checker := &health.Checker{
@@ -112,7 +114,9 @@ func buildPipeline(applier *apply.NftApplier, st *store.Store, apiAddr string) *
 			return conn.Close()
 		},
 	}
-	return apply.NewPipeline(applier, rollback.NewManager(rollback.DefaultRestoreTimeout), checker, st)
+	pipeline := apply.NewPipeline(applier, rollback.NewManager(rollback.DefaultRestoreTimeout), checker, st)
+	pipeline.Reload = services.NewReloader().Sync
+	return pipeline
 }
 
 // openStore opens the config store, creating it with a first-boot default

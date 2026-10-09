@@ -1,13 +1,14 @@
 // Package render turns a validated configuration document into the
-// concrete artifacts the appliance runs: today the complete nftables
-// ruleset; service daemon configs (unbound, dnsmasq, wireguard) are later
-// waves. Rendering is a pure function of the configuration — the same
+// concrete artifacts the appliance runs: the complete nftables ruleset and
+// the service daemon configs (systemd-networkd units, dnsmasq, unbound,
+// wireguard). Rendering is a pure function of the configuration — the same
 // config always renders byte-identical output, which is what makes the
 // golden-file tests and the apply pipeline's determinism guarantees hold.
 //
 // The nftables ruleset models OPNsense's pf semantics; docs/rules-semantics.md
 // records the translation decisions (one base chain per hook, first-match
-// evaluation, NAT placement).
+// evaluation, NAT placement). docs/service-renderers.md records the service
+// renderers' decisions.
 package render
 
 import (
@@ -25,20 +26,63 @@ import (
 // this table.
 const Table = "axonwall"
 
-// Rendered holds every artifact a config renders into. Wave 1 renders only
-// the nftables ruleset; service-config renderers extend this struct.
+// Rendered holds every artifact a config renders into: the nftables
+// ruleset plus one artifact per service renderer. A nil service artifact
+// (Dnsmasq, Unbound, WireGuard) means the corresponding config section is
+// absent — the service reloader removes previously rendered files for it.
 type Rendered struct {
 	Nft []byte
+	// Networkd holds systemd-networkd units by file name (the networkd
+	// renderer emits .network and .link units for every interface).
+	Networkd map[string][]byte
+	// Dnsmasq is the complete dnsmasq.conf, or nil when services.dhcp is
+	// absent.
+	Dnsmasq []byte
+	// Unbound is the complete unbound.conf, or nil when services.dns is
+	// absent.
+	Unbound []byte
+	// WireGuard is the wg0 syncconf config, or nil when services.wireguard
+	// is absent.
+	WireGuard []byte
 }
 
-// All renders every render target for cfg. sourceRev annotates the ruleset
-// header with the store revision the config came from ("" for candidates).
+// All renders every render target for cfg. sourceRev annotates the
+// rendered headers with the store revision the config came from ("" for
+// candidates).
 func All(cfg *config.Config, sourceRev string) (*Rendered, error) {
-	r := &renderer{cfg: cfg, rev: sourceRev}
-	if err := r.render(); err != nil {
+	// The store and API validate before rendering; re-checking here keeps
+	// the renderer honest as a standalone entry point (bad input is a
+	// renderer error, never a malformed artifact).
+	if err := config.Validate(cfg); err != nil {
+		return nil, fmt.Errorf("render: %w", err)
+	}
+	nftR := &renderer{cfg: cfg, rev: sourceRev}
+	if err := nftR.render(); err != nil {
 		return nil, err
 	}
-	return &Rendered{Nft: []byte(r.out.String())}, nil
+	networkd, err := renderNetworkd(cfg, sourceRev)
+	if err != nil {
+		return nil, err
+	}
+	dnsmasq, err := renderDnsmasq(cfg, sourceRev)
+	if err != nil {
+		return nil, err
+	}
+	unbound, err := renderUnbound(cfg, sourceRev)
+	if err != nil {
+		return nil, err
+	}
+	wireguard, err := renderWireGuard(cfg, sourceRev)
+	if err != nil {
+		return nil, err
+	}
+	return &Rendered{
+		Nft:       []byte(nftR.out.String()),
+		Networkd:  networkd,
+		Dnsmasq:   dnsmasq,
+		Unbound:   unbound,
+		WireGuard: wireguard,
+	}, nil
 }
 
 type renderer struct {
@@ -52,13 +96,6 @@ func (r *renderer) pf(format string, args ...any) {
 }
 
 func (r *renderer) render() error {
-	// The store and API validate before rendering; re-checking here keeps
-	// the renderer honest as a standalone entry point (bad input is a
-	// renderer error, never a malformed ruleset).
-	if err := config.Validate(r.cfg); err != nil {
-		return fmt.Errorf("render: %w", err)
-	}
-
 	r.pf("#!/usr/sbin/nft -f")
 	r.pf("# AxonWall managed ruleset — rendered from the declarative config store.")
 	if r.rev == "" {
@@ -103,16 +140,7 @@ func (r *renderer) render() error {
 // kernelName maps a logical interface name (wan0) to the kernel device it
 // binds to (enp1s0) — iifname/oifname match kernel names.
 func (r *renderer) kernelName(logical string) (string, error) {
-	if logical == config.WireGuardInterfaceName {
-		// wg0 is materialized by the wireguard service; it has no
-		// interfaces entry by definition.
-		return logical, nil
-	}
-	ifc, ok := r.cfg.InterfaceByName(logical)
-	if !ok {
-		return "", fmt.Errorf("render: reference to undefined interface %q", logical)
-	}
-	return ifc.Match, nil
+	return kernelNameOf(r.cfg, logical)
 }
 
 // renderZoneSets emits one ifname set per zone with the kernel device names
