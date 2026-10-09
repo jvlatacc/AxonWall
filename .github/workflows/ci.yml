@@ -12,6 +12,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Fail fast before the heavy build jobs: the PR title and every commit
+  # subject on a PR must follow Conventional Commits (spec wave-1 criterion 8:
+  # conventional commits enforced by required checks).
+  commit-hygiene:
+    name: commit hygiene (conventional commits + PR title)
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'pull_request'
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate PR title and commit subjects
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ github.event.pull_request.number }}/commits" \
+            --jq '.[] | .sha[0:8] + " " + (.commit.message | split("\n")[0])' \
+            | .github/scripts/commit-hygiene.sh --title "$PR_TITLE"
+
   go:
     name: go / test+lint
     runs-on: ubuntu-24.04
