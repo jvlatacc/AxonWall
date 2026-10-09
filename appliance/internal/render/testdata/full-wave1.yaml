@@ -1,0 +1,35 @@
+version: 1
+zones:
+  wan: { interfaces: [wan0] }
+  lan: { interfaces: [lan0] }
+  wg0: { interfaces: [wg0] }
+interfaces:
+  - { name: wan0, match: enp1s0, addressing: dhcp }
+  - { name: lan0, match: enp2s0, address: [192.168.1.1/24] }
+services:
+  dns:
+    resolver: unbound
+    listen: [lan, wg0]
+  dhcp:
+    pools:
+      - { zone: lan, range: [192.168.1.100, 192.168.1.199], gateway: 192.168.1.1, dns: 192.168.1.1 }
+  wireguard:
+    listen-port: 51820
+    peers:
+      - { name: laptop, public-key: QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=, allowed-ips: [10.10.0.2/32] }
+firewall:
+  default: { input: drop, forward: drop, output: accept }
+  aliases:
+    admin-hosts: { type: ipv4, entries: [192.168.1.10, 192.168.1.11] }
+    blocked-nets: { type: ipv6, entries: ["2001:db8:bad::/48"] }
+    malware-feeds: { type: url-table, url: https://example.com/feeds.txt }
+    empty-feed: { type: url-table, url: https://example.com/empty.txt }
+  nat:
+    - { name: lan-masq, out: wan0, source: lan, mode: masquerade }
+    - { name: web-forward, mode: port-forward, in: wan0, proto: tcp, dst-port: 8443, to: 192.168.1.50:443 }
+  rules:
+    - { name: lan-to-wan, from: lan, to: wan, verdict: accept }
+    - { name: wg-to-lan, from: wg0, to: lan, verdict: accept }
+    - { name: admin-only-out, from: lan, to: wan, source-alias: admin-hosts, verdict: accept }
+    - { name: admin-ssh, from: lan, to: firewall, service: ssh, source-alias: admin-hosts, verdict: accept }
+    - { name: wg-handshake, from: wan, to: firewall, service: udp/51820, verdict: accept }

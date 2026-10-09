@@ -159,17 +159,36 @@ type Defaults struct {
 }
 
 // Alias is a named set of addresses (nftables named set in the renderer).
+//
+// Types ipv4 and ipv6 hold static entries. Type url-table names a source
+// URL whose content (one address or CIDR per line) populates the set: the
+// config carries the seed entries (possibly none) and the URL, while axond
+// refreshes the runtime set from the URL without a config transaction.
+// URL-table sets are IPv4 — the wave-1 feed format and the common blocklist
+// case; IPv6 feeds are later work.
 type Alias struct {
-	Type    string   `yaml:"type"` // ipv4 | ipv6
+	Type    string   `yaml:"type"` // ipv4 | ipv6 | url-table
+	URL     string   `yaml:"url"`  // url-table only: feed source
 	Entries []string `yaml:"entries"`
 }
 
-// NATRule is a source-NAT rule. Wave 1 supports masquerade only.
+// NATRule is a NAT rule. Mode masquerade source-NATs a zone's traffic as it
+// leaves an interface. Mode port-forward DNATs a public port on an ingress
+// interface to an internal host (IPv4, optionally with a rewritten port);
+// the renderer also emits the matching forward-chain allowance, the
+// equivalent of OPNsense's filter rule association.
 type NATRule struct {
 	Name   string `yaml:"name"`
-	Out    string `yaml:"out"`    // logical interface name
-	Source string `yaml:"source"` // zone name
+	Out    string `yaml:"out"`    // masquerade: egress interface (logical)
+	Source string `yaml:"source"` // masquerade: source zone
 	Mode   string `yaml:"mode"`
+
+	// Port-forward fields (mode: port-forward). Out and Source must be
+	// empty in that mode; the fields above belong to masquerade.
+	In      string `yaml:"in"`       // ingress interface (logical)
+	Proto   string `yaml:"proto"`    // tcp | udp
+	DstPort int    `yaml:"dst-port"` // public port
+	To      string `yaml:"to"`       // internal ip or ip:port (IPv4)
 }
 
 // Rule is a firewall rule between zones (or FirewallZone for the appliance
