@@ -576,3 +576,32 @@ h1, h2, h3 {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+
+/* Login — the token gate rendered instead of the console shell. */
+.axw-login-wrap {
+  align-items: center;
+  background: var(--surface-base);
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+  padding: var(--space-5);
+}
+
+.axw-login {
+  width: min(420px, 100%);
+}
+
+.axw-login .axw-card {
+  box-shadow: var(--shadow-lifted);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+}
+
+.axw-login .axw-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
