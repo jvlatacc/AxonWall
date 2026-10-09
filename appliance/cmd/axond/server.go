@@ -17,6 +17,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jvlatacc/AxonWall/appliance/internal/backup"
 	"github.com/jvlatacc/AxonWall/appliance/internal/config"
@@ -48,13 +49,27 @@ type Confirmer interface {
 // Server is the axond REST API.
 type Server struct {
 	store   Store
-	token   string
 	applier Applier
 
+	// currentToken holds the admin bearer token behind a pointer so token
+	// rotation (POST /auth/token) swaps it atomically — every authenticated
+	// request reads it without a lock.
+	currentToken atomic.Pointer[string]
+
+	// tokenFile is the file the daemon reads its token from at boot
+	// (--token-file). Set, rotations persist there so a rotated token
+	// survives reboot; empty (dev), rotation is in-memory only and the
+	// response says so.
+	tokenFile atomic.Pointer[string]
+
+	// uiDir is the built web console bundle (--ui-dir). Set, axond serves
+	// it on the same TLS listener as the API (same origin, one certificate).
+	uiDir atomic.Pointer[string]
+
 	// mu serializes whole apply-and-commit sequences against each other:
-	// config PUTs, backup restores (extract through swap), and exports.
-	// Store-level optimistic concurrency stays as the second line of
-	// defense for callers that bypass the server.
+	// config PUTs, backup restores (extract through swap), exports, and
+	// status snapshots. Store-level optimistic concurrency stays as the
+	// second line of defense for callers that bypass the server.
 	mu sync.Mutex
 }
 
@@ -74,31 +89,66 @@ func NewServer(s Store, token string, applier Applier) *Server {
 	if applier == nil {
 		applier = noopApplier{}
 	}
-	return &Server{store: s, token: token, applier: applier}
+	srv := &Server{store: s, applier: applier}
+	srv.currentToken.Store(&token)
+	return srv
+}
+
+// SetTokenFile points token persistence at the daemon's token file
+// (--token-file). Rotations rewrite it so a rotated token survives reboot.
+func (s *Server) SetTokenFile(path string) { s.tokenFile.Store(&path) }
+
+// SetUIDir serves the built web console bundle from dir on the API's TLS
+// listener. Call before Handler.
+func (s *Server) SetUIDir(dir string) { s.uiDir.Store(&dir) }
+
+func (s *Server) tokenFilePath() string {
+	if p := s.tokenFile.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
+
+func (s *Server) adminToken() string {
+	if p := s.currentToken.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 type noopApplier struct{}
 
 func (noopApplier) Apply(*config.Config) error { return nil }
 
-// Handler returns the HTTP routing for axond.
+// Handler returns the HTTP routing for axond. API routes are registered
+// first and stay more specific than the console fallback, so a UI bundle
+// mounted at "/" can never shadow an API path.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /config", s.auth(s.handleGetConfig))
 	mux.HandleFunc("PUT /config", s.auth(s.handlePutConfig))
+	mux.HandleFunc("GET /status", s.auth(s.handleStatus))
+	mux.HandleFunc("GET /net/devices", s.auth(s.handleNetDevices))
+	mux.HandleFunc("GET /setup", s.auth(s.handleGetSetup))
+	mux.HandleFunc("POST /setup/complete", s.auth(s.handleSetupComplete))
+	mux.HandleFunc("POST /auth/token", s.auth(s.handleRotateToken))
 	mux.HandleFunc("GET /backup/export", s.auth(s.handleBackupExport))
 	mux.HandleFunc("POST /backup/restore", s.auth(s.handleBackupRestore))
 	mux.HandleFunc("POST /confirm", s.auth(s.handleConfirm))
+	if dir := s.uiDir.Load(); dir != nil {
+		mux.Handle("/", spaFileServer(*dir))
+	}
 	return mux
 }
 
 // auth rejects requests without the correct bearer token. /healthz stays
-// open: it reports nothing but liveness.
+// open: it reports nothing but liveness. The comparison is constant-time
+// against the current token — rotation takes effect on the next request.
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		got, ok := bearerToken(r)
-		if !ok || subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) != 1 {
+		if !ok || subtle.ConstantTimeCompare([]byte(got), []byte(s.adminToken())) != 1 {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{
 				"error": "missing or invalid bearer token",
 			})
@@ -150,6 +200,25 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
+	}
+
+	// Optimistic concurrency: a client that read revision R and sends
+	// "X-AxonWall-Revision: R" must not silently clobber a newer revision.
+	// Absent header = legacy/CLI write, guarded only by the transaction's
+	// own base-revision check below.
+	if expected := strings.TrimSpace(r.Header.Get("X-AxonWall-Revision")); expected != "" {
+		current, err := s.store.Rev()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if current != expected {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":   "config changed on the appliance — reload and retry",
+				"current": current,
+			})
+			return
+		}
 	}
 
 	// Parse strictly first: an invalid document never opens a transaction.

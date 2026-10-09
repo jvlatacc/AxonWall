@@ -36,6 +36,7 @@ func main() {
 	devToken := flag.String("dev-token", "", "API bearer token (development only)")
 	certFile := flag.String("tls-cert", "", "TLS certificate path")
 	keyFile := flag.String("tls-key", "", "TLS key path")
+	uiDir := flag.String("ui-dir", "", "directory of the built web console bundle, served on the API listener")
 	skipApply := flag.Bool("skip-apply", false, "development only: skip rendering and applying the firewall at boot")
 	flag.Parse()
 
@@ -55,6 +56,14 @@ func main() {
 
 	pipeline := buildPipeline(apply.NewNftApplier(), st, ln.Addr().String())
 	srv := NewServer(st, apiToken, pipeline)
+	if *tokenFile != "" {
+		// Token rotations persist to the boot token file so a rotated
+		// admin token survives reboot.
+		srv.SetTokenFile(*tokenFile)
+	}
+	if *uiDir != "" {
+		srv.SetUIDir(*uiDir)
+	}
 
 	tlsConf, err := tlsConfig(*certFile, *keyFile)
 	if err != nil {
@@ -93,6 +102,9 @@ func main() {
 
 	if host := lanBindHost(cfg); host == "" {
 		log.Printf("axond: lan zone has no static address yet; listening on all interfaces")
+	}
+	if *uiDir != "" {
+		log.Printf("axond: serving web console from %s on the API listener", *uiDir)
 	}
 	log.Printf("axond: serving API on https://%s", ln.Addr())
 
