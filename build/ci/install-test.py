@@ -396,9 +396,27 @@ def phase_asserts(firmware: str, runtime_text: str, disk: str, workdir: str) -> 
                   "key-only SSH drop-in staged")
             check("policy drop" in read_root("etc/nftables.conf"), "nftables baseline staged")
             check("127.0.0.1" in read_root("etc/resolv.conf"), "self-resolver resolv.conf staged")
-            wants = os.path.join(root_mount, "etc/systemd/system/multi-user.target.wants")
+            # Enablement lives in the wants dir of each unit's own [Install]
+            # target (serial-getty@ttyS0 → getty.target.wants), and chroot
+            # enablement can leave absolute link targets that os.path.exists
+            # would resolve against the runner's filesystem instead of this
+            # root. Check the way systemd does: a wants symlink anywhere
+            # under /etc/systemd/system whose target resolves in this root.
+            sysd = os.path.join(root_mount, "etc/systemd/system")
+            wants = os.path.join(sysd, "multi-user.target.wants")
             for unit in (*units,):
-                check(os.path.exists(os.path.join(wants, unit)), f"unit staged enabled: {unit}")
+                link = next((os.path.join(dirpath, name)
+                             for dirpath, _, names in os.walk(sysd)
+                             if dirpath.endswith(".wants")
+                             for name in names if name == unit), None)
+                enabled = False
+                if link is not None:
+                    target = os.readlink(link)
+                    resolved = (os.path.normpath(os.path.join(root_mount, target.lstrip("/")))
+                                if target.startswith("/")
+                                else os.path.normpath(os.path.join(os.path.dirname(link), target)))
+                    enabled = os.path.exists(resolved)
+                check(enabled, f"unit staged enabled: {unit}")
             check(not os.path.lexists(os.path.join(wants, "dnsmasq.service")),
                   "dnsmasq not staged enabled")
             try:
