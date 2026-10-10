@@ -131,6 +131,10 @@ def qemu_base_args(disk: str, firmware: str, workdir: str) -> list:
     args = [
         "qemu-system-x86_64",
         "-accel", "tcg,thread=multi",
+        # Debian 13 requires an x86-64-v2 CPU; "max" gives TCG's fullest
+        # feature set (the default qemu64 model may lack v2 flags) — same
+        # shape the boot-test job proves out.
+        "-cpu", "max",
         "-smp", "2",
         "-m", "2048",
         "-drive", f"file={disk},format=raw,if=virtio",
@@ -168,7 +172,17 @@ def phase_install(iso: str, disk: str, firmware: str, workdir: str, timeout_s: i
     kernel, initrd = extract_installer(iso, workdir)
     args = qemu_base_args(disk, firmware, workdir)
     args += [
-        "-cdrom", iso,
+        # The installer ISO attaches as a virtio-scsi CD, NOT the -cdrom IDE
+        # shorthand. CI evidence (run 38006799791): under the runner's qemu
+        # 8.2.2, the IDE CD attached via -cdrom never registered in the guest
+        # when the d-i kernel was booted via -kernel/-initrd (both PATA ports
+        # probed, no ATAPI device, cdrom-detect retried for the full timeout).
+        # virtio is the transport this initrd provably uses: virtio_blk
+        # registers the install disk, and the initrd ships virtio_scsi.ko,
+        # sr_mod, and isofs — so scsi-cd surfaces at /dev/sr0 for cdrom-detect.
+        "-drive", f"id=cd0,file={iso},media=cdrom,if=none,readonly=on",
+        "-device", "virtio-scsi-pci",
+        "-device", "scsi-cd,drive=cd0",
         "-kernel", kernel,
         "-initrd", initrd,
         # The same append live-build gives the installer entries, minus
