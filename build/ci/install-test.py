@@ -225,7 +225,16 @@ def phase_runtime(disk: str, firmware: str, workdir: str, timeout_s: int) -> str
     with open(os.path.join(workdir, "serial-runtime.log"), "wb") as lf:
         vm = SerialVM(args, lf)
         vm.wait_for(LOGIN_HINT, time.monotonic() + timeout_s)
-        log(f"[{firmware}] installed system reached the serial getty; logging in")
+        log(f"[{firmware}] installed system reached the serial getty")
+        # The marker is axond's own "ruleset loaded, services up" signal on
+        # /dev/console. A fresh /config starts empty; axond's first boot
+        # initializes the store and applies the ruleset, and under TCG that
+        # lands well after the getty appears. The live boot test waits for
+        # this marker — the installed system must reach the same firewall
+        # state (spec criterion 3) — so wait for it before probing and
+        # powering off; without the wait the VM powers down mid-apply.
+        vm.wait_for(FIREWALL_ACTIVE_MARKER, time.monotonic() + timeout_s)
+        log(f"[{firmware}] firewall-active marker seen; logging in for probes")
         vm.send(b"root\n")
         vm.wait_for("Password:", time.monotonic() + 120)
         vm.send((ROOT_PASSWORD + "\n").encode())
