@@ -10,9 +10,11 @@
 #     the live chroot's debconf (chroot_preseed only consumes *.cfg / *.cfg.chroot).
 #   - auto/config passes --debian-installer-preseedfile preseed.cfg, so every
 #     installer boot entry carries file=/cdrom/install/preseed.cfg.
-#   - auto/config passes --bootappend-install "auto=true priority=critical
-#     console=tty0 console=ttyS0,115200n8", so ANY installer menu entry (not just
-#     "Automated install") boots a preseeded, serial-speaking installer.
+#   - auto/config passes --bootappend-install "priority=critical console=tty0
+#     console=ttyS0,115200n8", so ANY installer menu entry (not just "Automated
+#     install") boots a preseeded, serial-speaking installer. Deliberately NO
+#     "auto=true": it enables network preseed fetching, whose failure surfaces
+#     a blocking checksum-error dialog mid-install (CI run 38022531190).
 #
 # Patterns follow the official trixie example preseed
 # (https://www.debian.org/releases/trixie/example-preseed.txt).
@@ -122,6 +124,13 @@ d-i debian-installer/add-kernel-opts string console=tty0 console=ttyS0,115200n8
 
 d-i grub-installer/only_debian boolean true
 d-i grub-installer/with_other_os boolean false
+# The grub-pc package's postinst asks which device gets the boot loader;
+# an unanswered question stalls the unattended install at "Installing
+# GRUB boot loader" (CI evidence, runs 38013960038/38022531190). The CI
+# test disk is QEMU virtio (/dev/vda); on other hardware the device may
+# differ — wave-1 unattended coverage is the QEMU path.
+d-i grub-pc/install_devices multiselect /dev/vda
+d-i grub-installer/bootdev string /dev/vda
 
 d-i finish-install/reboot_in_progress note
 
