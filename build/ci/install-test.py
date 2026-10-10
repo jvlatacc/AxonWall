@@ -193,11 +193,24 @@ def phase_install(iso: str, disk: str, firmware: str, workdir: str, timeout_s: i
     ]
     with open(os.path.join(workdir, "serial-install.log"), "wb") as lf:
         vm = SerialVM(args, lf)
-        # debian-installer runs unattended and reboots at the end; -no-reboot
-        # exits QEMU. The late-command marker is asserted after exit.
-        vm.wait_exit(time.monotonic() + timeout_s, "unattended install")
-        if vm.proc.returncode not in (0, None):
-            die(f"installer QEMU exited with {vm.proc.returncode}; see serial-install.log")
+        # Phase 1 completes when the late-command configurator prints its
+        # final marker: the appliance files, services, /config fstab wiring,
+        # and grub config are then all written to the target disk. d-i does
+        # NOT exit after a completed install — it returns to the main menu
+        # and processes remaining items, and an offline install can raise a
+        # dialog there and wait for input indefinitely (CI evidence, runs
+        # 38033187998 / 38038551699: every configurator marker fired, the
+        # jobs still burned their full timeout waiting for an exit that
+        # never came). So don't wait for QEMU to exit — watch for the
+        # marker, then stop the VM. Phase 2 boots the disk image directly;
+        # ext4 journal recovery absorbs the non-graceful shutdown.
+        vm.wait_for(CONFIGURED_MARKER, time.monotonic() + timeout_s)
+        vm.proc.terminate()
+        try:
+            vm.proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            vm.proc.kill()
+            vm.proc.wait()
         text = vm.buf.decode("utf-8", "replace")
     if CONFIGURED_MARKER not in text:
         die(f"{CONFIGURED_MARKER!r} not seen on the installer serial console")
