@@ -52,11 +52,14 @@ run separately.
 | `livebuild/config/package-lists/` | explicit package sets (runtime + curated firmware) |
 | `livebuild/config/hooks/` | chroot-stage service baseline (see the no-op pairing note under `live/`) |
 | `livebuild/config/includes.chroot_after_packages/` | baked-in files: sshd hardening, nftables baseline, resolv.conf |
+| `livebuild/config/preseed/axonwall.cfg.installer` | unattended install-to-disk preseed (installer-only — not applied to the live chroot) |
+| `livebuild/config/includes.binary/axonwall/installed-system/` | staged onto the ISO for late_command: installed-system configurator + appliance files (nftables baseline, SSH hardening, axond unit) |
 | `livebuild/config/bootloaders/grub-pc/` | grub.cfg override adding the serial console menu |
 | `container/` | digest-pinned build container |
 | `build-iso.sh` | the one-command wrapper |
 | `package-verify.sh` | trixie package-verification spike (CI gate) |
 | `PACKAGE-VERIFY.md` | spike findings (including the opennds correction) |
+| `ci/install-test.py` | QEMU TCG install-to-disk CI driver: boots the ISO's debian-installer kernel directly (-kernel/-initrd, preseed on the cmdline — boot-menu serial input is unreliable over QEMU stdio), then reboots from disk and asserts partition/service/firewall state |
 
 ## Known limitation (deliberate, wave-1 scope)
 

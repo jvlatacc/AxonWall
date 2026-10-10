@@ -6,8 +6,8 @@
 #   docker run --rm --privileged -v "$PWD:/repo" axonwall/iso-builder build/build-iso.sh
 #
 # Steps: package verification -> live-build config -> lb build -> verify media
-# (BIOS + UEFI + Secure Boot chain) -> 2 GiB size guard -> dist/ outputs with
-# SHA256SUMS + package manifest.
+# (BIOS + UEFI + Secure Boot chain + debian-installer/preseed presence) ->
+# 2 GiB size guard -> dist/ outputs with SHA256SUMS + package manifest.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -106,6 +106,20 @@ grep -qiE 'bootx64|grubx64|gcdx64' /tmp/axonwall-efi-listing.txt || {
 	exit 1
 }
 echo "OK: El Torito BIOS (isolinux) + UEFI ($(basename "${EFI_IMG_PATH}") with shim/grub) present"
+
+# Installer presence: the hybrid media must carry debian-installer + the AxonWall
+# preseed (install-to-disk is part of the wave-1 contract; wired in auto/config).
+xorriso -indev "${ISO_NAME}" -ls /install > /tmp/axonwall-install-listing.txt 2>&1 \
+	|| { echo "FATAL: ISO has no /install tree — debian-installer missing from the media" >&2; exit 1; }
+grep -q 'initrd.gz' /tmp/axonwall-install-listing.txt || {
+	echo "FATAL: /install/initrd.gz missing from the ISO" >&2
+	exit 1
+}
+grep -q 'preseed.cfg' /tmp/axonwall-install-listing.txt || {
+	echo "FATAL: /install/preseed.cfg missing from the ISO (preseed wiring broken)" >&2
+	exit 1
+}
+echo "OK: debian-installer + preseed present on the medium"
 
 SIZE="$(stat -c%s "${ISO_NAME}")"
 MAX_BYTES=$((2 * 1024 * 1024 * 1024))

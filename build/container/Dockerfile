@@ -24,6 +24,7 @@ RUN apt-get update \
 		git \
 		live-build \
 		mtools \
+		wget \
 		xorriso \
 	&& rm -rf /var/lib/apt/lists/*
 
