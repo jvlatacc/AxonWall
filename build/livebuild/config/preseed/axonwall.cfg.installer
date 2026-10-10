@@ -10,11 +10,13 @@
 #     the live chroot's debconf (chroot_preseed only consumes *.cfg / *.cfg.chroot).
 #   - auto/config passes --debian-installer-preseedfile preseed.cfg, so every
 #     installer boot entry carries file=/cdrom/install/preseed.cfg.
-#   - auto/config passes --bootappend-install "priority=critical console=tty0
-#     console=ttyS0,115200n8", so ANY installer menu entry (not just "Automated
-#     install") boots a preseeded, serial-speaking installer. Deliberately NO
-#     "auto=true": it enables network preseed fetching, whose failure surfaces
-#     a blocking checksum-error dialog mid-install (CI run 38022531190).
+#   - auto/config passes --bootappend-install "auto=true priority=critical
+#     console=tty0 console=ttyS0,115200n8", so ANY installer menu entry (not
+#     just "Automated install") boots a preseeded, serial-speaking installer.
+#     auto=true is LOAD-BEARING: it sets auto-install/enable, whose startup
+#     script (S60auto-install in the d-i initrd) suppresses the interactive
+#     locale/keyboard questions until the preseeded answers apply. Without it
+#     the installer blocks on "Select a language" (CI run 38027382686).
 #
 # Patterns follow the official trixie example preseed
 # (https://www.debian.org/releases/trixie/example-preseed.txt).
@@ -28,6 +30,15 @@ d-i keyboard-configuration/xkb-keymap select us
 d-i console-setup/ask_detect boolean false
 
 d-i netcfg/choose_interface select auto
+# The install is fully CD-local (preseed, packages, and the post-install
+# configurator all come from the medium), and the installed system's network
+# is brought up by axond/systemd-networkd after reboot — so d-i network
+# configuration buys nothing. Disabling it also removes every DHCP-dependent
+# installer behavior: network-preseed's postinst consults the DHCP lease
+# (dhcp_preseed_url in /lib/preseed/preseed.sh) and, when a URL is derivable,
+# fetches d-i/trixie/./preseed.cfg and fails its checksum with a blocking
+# error dialog at priority=critical (CI run 38022531190, UEFI evidence).
+d-i netcfg/enable boolean false
 # QEMU/bare-metal DHCP carries no hostname; force the appliance name.
 # (configure-installed.sh rewrites /etc/hostname and /etc/hosts deterministically.)
 d-i netcfg/get_hostname string axonwall

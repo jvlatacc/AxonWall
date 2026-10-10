@@ -188,7 +188,7 @@ def phase_install(iso: str, disk: str, firmware: str, workdir: str, timeout_s: i
         # The same append live-build gives the installer entries, minus
         # initrd= (QEMU loads the initrd itself): preseed off the cdrom,
         # unattended, serial console.
-        "-append", "file=/cdrom/install/preseed.cfg priority=critical "
+        "-append", "file=/cdrom/install/preseed.cfg auto=true priority=critical "
                    "console=ttyS0,115200n8",
     ]
     with open(os.path.join(workdir, "serial-install.log"), "wb") as lf:

@@ -45,7 +45,7 @@ lb config noauto \
 	--bootloaders "syslinux,grub-efi" \
 	--uefi-secure-boot enable \
 	--bootappend-live "boot=live components console=tty0 console=ttyS0,115200n8 noautologin" \
-	--bootappend-install "priority=critical console=tty0 console=ttyS0,115200n8" \
+	--bootappend-install "auto=true priority=critical console=tty0 console=ttyS0,115200n8" \
 	--debian-installer live \
 	--debian-installer-preseedfile preseed.cfg \
 	--iso-volume "AxonWall" \
