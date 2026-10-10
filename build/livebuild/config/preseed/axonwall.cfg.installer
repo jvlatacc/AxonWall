@@ -115,7 +115,20 @@ d-i partman-auto/expert_recipe string \
 	. \
 	512 512 512 linux-swap \
 		method{ swap } format{ } \
+	. \
+	512 1024 2048 ext4 \
+		method{ format } format{ } \
+		use_filesystem{ } filesystem{ ext4 } \
+		mountpoint{ /config } \
 	.
+
+# The /config partition is the recipe's LAST entry: the CI driver asserts that
+# layout ("disk image: /config is the last partition"), and keeping it last
+# makes appends-friendly partition numbers stable as the scheme evolves. d-i
+# mounts it at /target/config during the install; configure-installed.sh then
+# re-asserts the AXONCONFIG label and rewrites the fstab line to
+# LABEL=AXONCONFIG, which is the appliance contract (device names differ per
+# firmware path; the label is what backup tooling and reinstalls key on).
 
 # Stale LVM/MD on a re-used disk must not stop the unattended run.
 d-i partman-lvm/device_remove_lvm boolean true
