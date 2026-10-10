@@ -1,0 +1,224 @@
+name: CI
+
+# Additive by design: other waves attach their own jobs here (image
+# factory builds, boot tests). The go job gates every appliance change.
+on:
+  push:
+    branches: [main, 'release/**']
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fail fast before the heavy build jobs: the PR title and every commit
+  # subject on a PR must follow Conventional Commits (spec wave-1 criterion 8:
+  # conventional commits enforced by required checks).
+  commit-hygiene:
+    name: commit hygiene (conventional commits + PR title)
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'pull_request'
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate PR title and commit subjects
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ github.event.pull_request.number }}/commits" \
+            --jq '.[] | .sha[0:8] + " " + (.commit.message | split("\n")[0])' \
+            | .github/scripts/commit-hygiene.sh --title "$PR_TITLE"
+
+  go:
+    name: go / test+lint
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: appliance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: appliance/go.mod
+          cache-dependency-path: appliance/go.sum
+      - name: Build
+        run: go build ./...
+      - name: Test
+        run: go test ./...
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+          working-directory: appliance
+
+  build-iso:
+    name: build hybrid BIOS+UEFI ISO
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      # Retries absorb residual registry flakiness (Docker Hub/OCI mirror 429s
+      # from shared runner IPs) — the failure mode observed on the first CI run.
+      - name: Build pinned builder image
+        run: |
+          for attempt in 1 2 3; do
+            if docker build -t axonwall/iso-builder:ci build/container; then
+              exit 0
+            fi
+            echo "docker build attempt ${attempt} failed" >&2
+            sleep 60
+          done
+          echo "FATAL: docker build failed after 3 attempts" >&2
+          exit 1
+
+      - name: Build ISO (one command from a clean checkout)
+        run: |
+          docker run --rm --privileged -v "$PWD:/repo" axonwall/iso-builder:ci /repo/build/build-iso.sh
+
+      - name: Upload ISO artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: axonwall-iso
+          path: |
+            dist/*.iso
+            dist/SHA256SUMS
+            dist/*.manifest.txt
+            dist/package-verify.txt
+            dist/el-torito-report.txt
+          if-no-files-found: error
+          compression-level: 0
+
+  boot-test:
+    name: boot test (${{ matrix.firmware }})
+    runs-on: ubuntu-24.04
+    needs: build-iso
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        firmware: [bios, uefi]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download built ISO
+        uses: actions/download-artifact@v4
+        with:
+          name: axonwall-iso
+          path: dist
+
+      - name: Install QEMU and OVMF
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            qemu-system-x86 ovmf
+
+      # Boots the live ISO under TCG software emulation (hosted runners have
+      # no KVM) on both firmware paths and asserts the deterministic
+      # firewall-active marker on the SERIAL console transcript (spec wave-1
+      # criterion 2). Serial logs and assert output upload on every run.
+      - name: Run boot test (${{ matrix.firmware }})
+        run: |
+          python3 build/ci/boot-test.py \
+            --iso 'dist/axonwall-*.iso' \
+            --firmware ${{ matrix.firmware }} \
+            --work boot-work
+
+      - name: Upload boot-test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-test-${{ matrix.firmware }}-evidence
+          path: |
+            boot-work/serial.log
+            boot-work/assert-*.txt
+            boot-work/qemu-cmd.txt
+          if-no-files-found: warn
+          compression-level: 0
+
+  ui:
+    name: ui / lint+test+build
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      # The integration specs boot a real axond; setup-go supplies the toolchain.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: appliance/go.mod
+          cache-dependency-path: appliance/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  install-test:
+    name: install-to-disk (${{ matrix.firmware }})
+    runs-on: ubuntu-24.04
+    needs: build-iso
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        firmware: [bios, uefi]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download built ISO
+        uses: actions/download-artifact@v4
+        with:
+          name: axonwall-iso
+          path: dist
+
+      - name: Install QEMU and OVMF
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            qemu-system-x86 ovmf xorriso
+
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      # Unattended install → reboot from disk → serial + host-side asserts
+      # (spec wave-1 criterion 3). TCG software emulation: hosted runners have
+      # no KVM. Evidence (serial logs, assert output) uploads on every run.
+      - name: Run install-to-disk test (${{ matrix.firmware }})
+        run: |
+          python3 build/ci/install-test.py \
+            --iso 'dist/*.iso' \
+            --firmware ${{ matrix.firmware }} \
+            --work install-work
+
+      - name: Upload install-test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-test-${{ matrix.firmware }}-evidence
+          path: |
+            install-work/serial-install.log
+            install-work/serial-runtime.log
+            install-work/assert-part.txt
+            install-work/assert-firewall.txt
+            install-work/assert-services.txt
+            install-work/assert-disk.txt
+            install-work/assert-summary.txt
+          if-no-files-found: warn
+          compression-level: 0

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Intentional no-op — do not delete.
+#
+# live-build 20250505 chroot_hooks only enters its hook-execution block when BOTH
+# config/hooks/normal/*.chroot AND (config/hooks/live/*.chroot OR *.container) match;
+# hooks placed only under live/ would silently never run. AxonWall keeps its real
+# hooks in normal/ and pairs them with this no-op so the block is always entered.
+exit 0

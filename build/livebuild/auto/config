@@ -1,0 +1,62 @@
+#!/bin/sh
+# AxonWall live-build configuration — source of truth for ISO factory options.
+# Spec: art_mxHM10hO (locked decisions: Debian 13 trixie pinned point release,
+# hybrid BIOS+UEFI+Secure Boot media, serial console, curated non-free-firmware).
+#
+# Mirror strategy (reproducible builds):
+#   BUILD-TIME (debootstrap + chroot apt) pins snapshot.debian.org at
+#   AXONWALL_SNAPSHOT so the package universe is frozen to one instant.
+#   RUNTIME (the apt sources written into the image) uses deb.debian.org so the
+#   installed appliance updates normally. Override with AXONWALL_MIRROR_MODE=live.
+#
+# Hybrid media: amd64 defaults to LB_IMAGE_TYPE=iso-hybrid in live-build 20250505
+# (BIOS isolinux + UEFI shim/grub on one ISO) — the default is kept deliberately;
+# do not "fix" it to plain iso.
+#
+# Bootloaders: "syslinux,grub-efi" — live-build's Prepare_config() splits this list
+# (comma-separated) into the BIOS (syslinux/isolinux) and EFI (grub-efi) selections.
+set -eu
+
+DISTRIBUTION=trixie
+ARCHITECTURE=amd64
+SNAPSHOT="${AXONWALL_SNAPSHOT:-20261005T000000Z}"
+
+case "${AXONWALL_MIRROR_MODE:-snapshot}" in
+	snapshot)
+		MIRROR_BUILD="https://snapshot.debian.org/archive/debian/${SNAPSHOT}"
+		MIRROR_BUILD_SECURITY="https://snapshot.debian.org/archive/debian-security/${SNAPSHOT}"
+		;;
+	live)
+		MIRROR_BUILD="https://deb.debian.org/debian"
+		MIRROR_BUILD_SECURITY="https://security.debian.org/debian-security"
+		;;
+	*)
+		echo "FATAL: AXONWALL_MIRROR_MODE must be 'snapshot' or 'live'" >&2
+		exit 2
+		;;
+esac
+MIRROR_RUNTIME="https://deb.debian.org/debian"
+MIRROR_RUNTIME_SECURITY="https://security.debian.org/debian-security"
+
+lb config noauto \
+	--architecture "${ARCHITECTURE}" \
+	--distribution "${DISTRIBUTION}" \
+	--archive-areas "main non-free-firmware" \
+	--bootloaders "syslinux,grub-efi" \
+	--uefi-secure-boot enable \
+	--bootappend-live "boot=live components console=tty0 console=ttyS0,115200n8 noautologin" \
+	--bootappend-install "auto=true priority=critical console=tty0 console=ttyS0,115200n8" \
+	--debian-installer live \
+	--debian-installer-preseedfile preseed.cfg \
+	--iso-volume "AxonWall" \
+	--parent-mirror-bootstrap "${MIRROR_BUILD}" \
+	--parent-mirror-chroot "${MIRROR_BUILD}" \
+	--parent-mirror-chroot-security "${MIRROR_BUILD_SECURITY}" \
+	--parent-mirror-binary "${MIRROR_BUILD}" \
+	--parent-mirror-binary-security "${MIRROR_BUILD_SECURITY}" \
+	--mirror-bootstrap "${MIRROR_BUILD}" \
+	--mirror-chroot "${MIRROR_BUILD}" \
+	--mirror-chroot-security "${MIRROR_BUILD_SECURITY}" \
+	--mirror-binary "${MIRROR_RUNTIME}" \
+	--mirror-binary-security "${MIRROR_RUNTIME_SECURITY}" \
+	"$@"

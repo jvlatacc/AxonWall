@@ -1,0 +1,22 @@
+# AxonWall managed dnsmasq configuration — rendered from the declarative config store.
+# Source revision: a1b2c3d4e5f6a7b8
+# DO NOT EDIT — regenerated on every apply; hand edits are out of model.
+
+# DHCP only. DNS is unbound's job (services.dns) — port=0 disables
+# dnsmasq's DNS listener entirely: one DNS listener per appliance.
+port=0
+# Follow interfaces as systemd-networkd brings them up or down.
+bind-dynamic
+# Authoritative on the appliance's own segments: answer from the local
+# pool immediately instead of waiting out an answering timeout.
+dhcp-authoritative
+
+# Serve DHCP only on the interfaces of zones that have pools.
+interface=enp2s0
+
+# Pools: tagged ranges so per-zone options reach the right clients.
+dhcp-range=set:lan,192.168.1.100,192.168.1.199,255.255.255.0
+
+# Per-zone DHCP options: gateway and DNS server handed to clients.
+dhcp-option=tag:lan,option:router,192.168.1.1
+dhcp-option=tag:lan,option:dns-server,192.168.1.1
