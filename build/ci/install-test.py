@@ -314,6 +314,9 @@ def phase_asserts(firmware: str, runtime_text: str, disk: str, workdir: str) -> 
     loop = out.stdout.strip()
     if not loop:
         die(f"losetup failed: {out.stderr}")
+    root_mount = tempfile.mkdtemp(prefix="axonroot-", dir=workdir)
+    cfg_mount = tempfile.mkdtemp(prefix="axoncfg-", dir=workdir)
+    boot_mount = tempfile.mkdtemp(prefix="axonboot-", dir=workdir)
     try:
         parts = sorted(
             p for p in os.listdir(f"/sys/block/{os.path.basename(loop)}")
@@ -333,8 +336,6 @@ def phase_asserts(firmware: str, runtime_text: str, disk: str, workdir: str) -> 
             check('LABEL="AXONCONFIG"' in line, "disk image: /config is the last partition")
 
         # Mount the ext4 partition that is neither /boot nor /config → the root fs.
-        root_mount = tempfile.mkdtemp(prefix="axonroot-", dir=workdir)
-        cfg_mount = tempfile.mkdtemp(prefix="axoncfg-", dir=workdir)
         root_dev = None
         for dev in partdevs:
             line = next((l for l in blk.stdout.splitlines() if l.startswith(f"{dev}:")), "")
@@ -353,6 +354,32 @@ def phase_asserts(firmware: str, runtime_text: str, disk: str, workdir: str) -> 
                 with open(os.path.join(root_mount, path)) as f:
                     return f.read()
 
+            def read_boot(rel: str) -> str:
+                # The recipe gives /boot its own partition, so boot files like
+                # grub/grub.cfg live at that partition's root — the mounted
+                # root fs only has an empty /boot mountpoint there. Probe the
+                # remaining ext4 partitions; fall back to the root fs for
+                # single-partition layouts.
+                for dev in partdevs:
+                    if dev == root_dev:
+                        continue
+                    line = next((l for l in blk.stdout.splitlines()
+                                 if l.startswith(f"{dev}:")), "")
+                    if 'TYPE="ext4"' not in line or 'LABEL="AXONCONFIG"' in line:
+                        continue
+                    p = run(["sudo", "mount", "-o", "ro", dev, boot_mount],
+                            capture_output=True, text=True)
+                    if p.returncode != 0:
+                        continue
+                    candidate = os.path.join(boot_mount, rel)
+                    if os.path.exists(candidate):
+                        with open(candidate) as f:
+                            data = f.read()
+                        run(["sudo", "umount", boot_mount])
+                        return data
+                    run(["sudo", "umount", boot_mount])
+                return read_root(rel)
+
             fstab = read_root("etc/fstab")
             check(re.search(r"LABEL=AXONCONFIG\s+/config\s+ext4\s+.*nofail", fstab) is not None,
                   "fstab: LABEL=AXONCONFIG /config line with nofail")
@@ -369,7 +396,11 @@ def phase_asserts(firmware: str, runtime_text: str, disk: str, workdir: str) -> 
                 check(os.path.exists(os.path.join(wants, unit)), f"unit staged enabled: {unit}")
             check(not os.path.lexists(os.path.join(wants, "dnsmasq.service")),
                   "dnsmasq not staged enabled")
-            check("console=ttyS0,115200n8" in read_root("boot/grub/grub.cfg"),
+            try:
+                grub_cfg = read_boot("grub/grub.cfg")
+            except FileNotFoundError:
+                grub_cfg = ""
+            check("console=ttyS0,115200n8" in grub_cfg,
                   "installed grub.cfg carries the serial console")
 
             # /config itself: mounts standalone (fresh install — empty store).
@@ -382,6 +413,8 @@ def phase_asserts(firmware: str, runtime_text: str, disk: str, workdir: str) -> 
                 run(["sudo", "umount", cfg_mount])
             run(["sudo", "umount", root_mount])
     finally:
+        for mnt in (root_mount, cfg_mount, boot_mount):
+            run(["sudo", "umount", mnt])
         run(["sudo", "losetup", "-d", loop])
 
     with open(os.path.join(workdir, "assert-summary.txt"), "w") as f:
