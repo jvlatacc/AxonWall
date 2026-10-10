@@ -373,10 +373,15 @@ def phase_asserts(firmware: str, runtime_text: str, disk: str, workdir: str) -> 
                         continue
                     candidate = os.path.join(boot_mount, rel)
                     if os.path.exists(candidate):
-                        with open(candidate) as f:
-                            data = f.read()
+                        # grub.cfg is root-owned and not world-readable on the
+                        # installed system — read it through sudo like every
+                        # other privileged operation in this driver.
+                        cat = run(["sudo", "cat", candidate],
+                                  capture_output=True, text=True)
                         run(["sudo", "umount", boot_mount])
-                        return data
+                        if cat.returncode == 0:
+                            return cat.stdout
+                        continue
                     run(["sudo", "umount", boot_mount])
                 return read_root(rel)
 
@@ -398,7 +403,7 @@ def phase_asserts(firmware: str, runtime_text: str, disk: str, workdir: str) -> 
                   "dnsmasq not staged enabled")
             try:
                 grub_cfg = read_boot("grub/grub.cfg")
-            except FileNotFoundError:
+            except (FileNotFoundError, PermissionError):
                 grub_cfg = ""
             check("console=ttyS0,115200n8" in grub_cfg,
                   "installed grub.cfg carries the serial console")
