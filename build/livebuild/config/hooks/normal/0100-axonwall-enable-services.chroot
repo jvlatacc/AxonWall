@@ -1,0 +1,23 @@
+#!/bin/sh
+# AxonWall appliance service baseline — runs in the chroot stage after package install.
+set -e
+
+# Interface ownership: systemd-networkd owns all appliance interfaces (axond renders
+# its config later); nothing else may manage links.
+systemctl enable systemd-networkd.service
+
+# Firewall: apply the shipped baseline ruleset at boot (safe-by-default drop posture).
+systemctl enable nftables.service
+
+# DNS: Unbound is the appliance resolver from day one (locked decision).
+systemctl enable unbound.service
+
+# Headless recovery: deterministic serial console login prompt on ttyS0.
+systemctl enable serial-getty@ttyS0.service
+
+# Management SSH is key-only (hardened via the sshd_config.d drop-in).
+systemctl enable ssh.service
+
+# dnsmasq: installed but deliberately NOT enabled — axond renders and enables it with
+# a real config; a blind default would fight Unbound for UDP/TCP port 53.
+systemctl disable dnsmasq.service 2>/dev/null || true

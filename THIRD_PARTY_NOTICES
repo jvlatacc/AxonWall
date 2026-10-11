@@ -1,0 +1,68 @@
+# THIRD_PARTY_NOTICES
+
+Third-party components built and shipped by AxonWall, with the license
+identifiers as declared in each component's `debian/copyright` in the Debian
+repositories. Versions are the Debian 13 "trixie" package versions verified in
+[build/PACKAGE-VERIFY.md](build/PACKAGE-VERIFY.md).
+
+License data was retrieved from the Debian package repositories on 2026-10-09
+(sources.debian.org copyright files; for firmware-nonfree and wireguard-tools,
+the copyright files inside the shipped `.deb`s).
+
+## Base operating system
+
+| Component | Version (trixie) | License (as found) |
+|---|---|---|
+| Debian 13 "trixie" | 13.7 | Debian distributes several thousand packages under their respective DFSG-free licenses; Debian is a registered trademark of Software in the Public Interest, Inc. |
+
+## Image factory (used to build the ISO; present in build tooling and live system)
+
+| Package | Version (trixie) | License (as found) |
+|---|---|---|
+| live-build | 1:20250505+deb13u1 | GPL-3+ |
+| live-boot | 1:20250815~deb13u1 | GPL-3+ |
+| live-config | 11.0.5 | GPL-3+ |
+| live-tools | 1:20240525 | GPL-3+ |
+| syslinux (isolinux, BIOS bootloader) | 3:6.04~git20190206.bf6db5b4+dfsg1-3.1 | GPL-2+ (also Expat, BSD-3-clause variants, LGPL-2.1 parts) |
+| grub2 (GRUB, UEFI bootloader; grub-efi-amd64-bin) | 2.12-9+deb13u2 | GPL-3+ |
+| shim-signed (Secure Boot shim; grub-efi-amd64-signed wrappers) | 1.51~1+deb13u1 | BSD-2-Clause (shim); signed GRUB wrappers public-domain / GPL-2 / GPL-2+ |
+
+## Runtime packages shipped in the appliance
+
+| Package | Version (trixie) | License (as found) |
+|---|---|---|
+| linux (the kernel, including in-kernel WireGuard) | 6.12.107-1 | GPL-2 (plus GPL-2+/X11, LGPL-2.1, BSD-2-clause parts per debian/copyright) |
+| nftables | 1.1.3-1 | GPL-2 (docs CC-BY-SA-4.0) |
+| systemd (systemd-networkd ships in this package) | 257.13-1~deb13u1 | LGPL-2.1+ (plus CC0-1.0, Expat, GPL-2 parts) |
+| dnsmasq | 2.91-1+deb13u2 | GPL-2 or GPL-3 |
+| unbound | 1.22.0-2+deb13u3 | BSD-3-NLnetLabs (plus ISC, BSD-3 variants) |
+| wireguard-tools | 1.0.20210914-3 | GPL-2 (plus MIT, LGPL-2.1+, ISC parts) |
+| openssh (openssh-server) | 1:10.0p1-7+deb13u4 | OpenSSH license (BSD-style; plus BSD-2-clause/BSD-3-clause parts) |
+| conntrack (conntrack-tools) | 1:1.4.8-2 | GPL-2+ |
+| iproute2 | 6.15.0-1 | GPL-2 |
+| git (config-store backing) | 1:2.47.3-0+deb13u1 | GPL-2 (plus BSD-3-clause, Expat, LGPL-2.1+ parts) |
+| ca-certificates | 20250419 | GPL-2+ (packaging); MPL-2.0 (Mozilla CA bundle) |
+| curl | 8.14.1-2+deb13u5 | curl (MIT-style; plus OLDAP-2.8, ISC, BSD parts) |
+| less | 668-1 | GPL-3+ or Less |
+
+## Curated non-free firmware (`non-free-firmware` archive area)
+
+The firmware packages ship vendor redistribution-permitted binary blobs; the
+packaging itself is GPL-2+. These are non-free by DFSG terms and are included
+only as far as appliance hardware requires them.
+
+| Package | Version (trixie) | License (as found) |
+|---|---|---|
+| firmware-realtek | 20250410-2 | GPL-2+ packaging; blobs under vendor binary-redistribution EULAs (Realtek, Hauppauge, Airoha, Intel Pro Wireless) |
+| firmware-iwlwifi | 20250410-2 | GPL-2+ packaging; blobs under vendor binary-redistribution EULAs |
+| firmware-misc-nonfree | 20250410-2 | GPL-2+ packaging; blobs under vendor binary-redistribution EULAs (includes the Intel ethernet firmware set) |
+
+All three binary packages are built from the single source package
+`firmware-nonfree`.
+
+## Complete license texts
+
+Every package's complete copyright and license text ships on the appliance
+under `/usr/share/doc/<package>/copyright` and is browsable at
+https://sources.debian.org/ — the authoritative, version-pinned source for
+every identifier above.

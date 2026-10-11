@@ -1,0 +1,165 @@
+name: Release
+
+# Wave-1 release pipeline (spec art_mxHM10hO, acceptance criterion 8): on a
+# version tag, rebuild the ISO in the pinned container exactly as CI does,
+# gate the release on the same QEMU TCG boot tests (BIOS + UEFI), then
+# publish the GitHub release with the ISO, SHA256SUMS, and the appliance
+# SBOM (the dpkg package manifest) as release assets.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-iso:
+    name: build pinned release ISO
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      # Retries absorb residual registry flakiness (Docker Hub/OCI mirror 429s
+      # from shared runner IPs) — the failure mode observed on the first CI run.
+      - name: Build pinned builder image
+        run: |
+          for attempt in 1 2 3; do
+            if docker build -t axonwall/iso-builder:ci build/container; then
+              exit 0
+            fi
+            echo "docker build attempt ${attempt} failed" >&2
+            sleep 60
+          done
+          echo "FATAL: docker build failed after 3 attempts" >&2
+          exit 1
+
+      - name: Build ISO (one command from a clean checkout)
+        run: |
+          docker run --rm --privileged -v "$PWD:/repo" axonwall/iso-builder:ci /repo/build/build-iso.sh
+
+      - name: Upload ISO artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: axonwall-iso-release
+          path: |
+            dist/*.iso
+            dist/SHA256SUMS
+            dist/*.manifest.txt
+            dist/package-verify.txt
+            dist/el-torito-report.txt
+          if-no-files-found: error
+          compression-level: 0
+
+  boot-test:
+    name: release boot test (${{ matrix.firmware }})
+    runs-on: ubuntu-24.04
+    needs: build-iso
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        firmware: [bios, uefi]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download built ISO
+        uses: actions/download-artifact@v4
+        with:
+          name: axonwall-iso-release
+          path: dist
+
+      - name: Install QEMU and OVMF
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            qemu-system-x86 ovmf
+
+      # A release only ships if the ISO boots to a working firewall on both
+      # firmware paths — same driver, same serial-state assertion as CI.
+      - name: Run boot test (${{ matrix.firmware }})
+        run: |
+          python3 build/ci/boot-test.py \
+            --iso 'dist/axonwall-*.iso' \
+            --firmware ${{ matrix.firmware }} \
+            --work boot-work
+
+      - name: Upload boot-test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-boot-test-${{ matrix.firmware }}-evidence
+          path: |
+            boot-work/serial.log
+            boot-work/assert-*.txt
+            boot-work/qemu-cmd.txt
+          if-no-files-found: warn
+          compression-level: 0
+
+  publish:
+    name: publish release assets
+    runs-on: ubuntu-24.04
+    needs: boot-test
+    timeout-minutes: 15
+    steps:
+      - name: Download built ISO and verification outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: axonwall-iso-release
+          path: dist
+
+      - name: Verify artifact integrity against the build-time checksums
+        working-directory: dist
+        run: |
+          ls -l
+          sha256sum -c SHA256SUMS
+
+      - name: Stage release assets (ISO, checksums, SBOM, verification)
+        working-directory: dist
+        run: |
+          # SBOM: the complete dpkg package manifest of the appliance image —
+          # the spec-sanctioned SBOM form for a dpkg-based appliance
+          # (build/build-iso.sh emits axonwall-image-*.manifest.txt).
+          MANIFEST=$(ls axonwall-image-*.manifest.txt)
+          cp "$MANIFEST" SBOM-dpkg-manifest.txt
+
+          # Regenerate SHA256SUMS over the exact shipped asset set.
+          rm -f SHA256SUMS
+          sha256sum axonwall-*.iso SBOM-dpkg-manifest.txt package-verify.txt el-torito-report.txt > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat > release-notes.md <<NOTES
+          AxonWall $TAG — bootable Debian firewall appliance (wave 1).
+
+          - Built from commit $GITHUB_SHA in the pinned builder container
+          - Boot-tested on BIOS (SeaBIOS) and UEFI (OVMF) under QEMU TCG before publish
+          - SHA256SUMS covers every asset in this release
+          - SBOM-dpkg-manifest.txt is the complete dpkg package manifest of the image
+          - package-verify.txt / el-torito-report.txt: build-time package and boot-media verification
+          NOTES
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "AxonWall $TAG" \
+            --notes-file release-notes.md \
+            dist/axonwall-*.iso \
+            dist/SHA256SUMS \
+            dist/SBOM-dpkg-manifest.txt \
+            dist/package-verify.txt \
+            dist/el-torito-report.txt
+
+      - name: Verify published release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'

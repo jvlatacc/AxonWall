@@ -1,0 +1,34 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - errorlint
+    - gosec
+    - misspell
+    - revive
+  settings:
+    revive:
+      rules:
+        - name: package-comments
+          disabled: false
+    gosec:
+      excludes:
+        # G304: config paths are operator-supplied by design (ax -f, axond --config-dir)
+        - G304
+    errcheck:
+      exclude-functions:
+        # CLI output: a failed write to stdout/stderr (closed pipe) must not
+        # turn a config operation's error path into noise. Exit codes come
+        # from run()'s return, not from these writes.
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

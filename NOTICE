@@ -1,0 +1,41 @@
+AxonWall — Debian firewall appliance
+====================================
+
+AxonWall is a standalone firewall appliance built on the Debian operating
+system. It is assembled from Debian's curated package repositories and wraps
+upstream free-software components without forking them.
+
+AxonWall itself does not yet carry a project license file; this notice covers
+the third-party components it builds and ships. Component versions and licenses
+are recorded in THIRD_PARTY_NOTICES in this directory.
+
+Third-party components
+----------------------
+
+AxonWall is built on, and ships, the following third-party works:
+
+- **Debian 13 "trixie"** — the base operating system of both the build
+  environment and the appliance. Debian is a registered trademark of Software
+  in the Public Interest, Inc. The distribution's packages are released under
+  their respective licenses; see THIRD_PARTY_NOTICES.
+- **Debian live-build** (with live-boot, live-config, live-tools) — the ISO
+  image factory. AxonWall wraps it; it is not modified.
+- **The shipped daemons and engines** — the Linux kernel, nftables,
+  systemd-networkd, dnsmasq, Unbound, WireGuard, OpenSSH, and the rest of the
+  curated runtime package set listed in
+  build/livebuild/config/package-lists/.
+
+Their copyright statements and license identifiers, as declared in the Debian
+repositories, are listed in THIRD_PARTY_NOTICES. Each package's complete
+copyright and license text is available on the installed appliance under
+/usr/share/doc/<package>/copyright and from the Debian sources at
+https://sources.debian.org/.
+
+Non-free firmware
+-----------------
+
+The ISO includes a curated subset of hardware firmware packages from Debian's
+`non-free-firmware` archive area (Realtek and Intel NIC firmware), required for
+appliance hardware to operate. These redistribution-permitted binaries are not
+free-software licenses in the DFSG sense; see THIRD_PARTY_NOTICES for the
+per-package license statements.

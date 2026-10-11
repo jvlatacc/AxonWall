@@ -1,0 +1,20 @@
+# AxonWall management daemon (config store, REST API, UI).
+# Installs on the installed system via configure-installed.sh (late_command).
+[Unit]
+Description=AxonWall management daemon
+Wants=network-online.target
+After=network-online.target
+# The appliance package installs /usr/bin/axond (axond integration); until then
+# this unit stays inactive instead of failing on every boot.
+ConditionPathExists=/usr/bin/axond
+
+[Service]
+Type=simple
+# axond refuses to start without a token source (no insecure mode) — first-boot
+# setup provisions /config/api-token.
+ExecStart=/usr/bin/axond --config-dir /config --token-file /config/api-token
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

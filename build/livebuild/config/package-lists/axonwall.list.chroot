@@ -1,0 +1,18 @@
+## AxonWall wave-1 core gateway runtime (spec art_mxHM10hO — locked decisions).
+## Keep the set explicit and minimal: every line grows the ISO and the audit surface.
+##
+## systemd-networkd ships inside the `systemd` package in trixie — there is no
+## separate networkd binary package to list.
+nftables
+systemd
+dnsmasq
+unbound
+wireguard-tools
+openssh-server
+conntrack
+iproute2
+ca-certificates
+curl
+git
+less
+live-tools

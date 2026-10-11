@@ -1,0 +1,63 @@
+===== 10-axonwall-lan0.link =====
+# AxonWall managed .link unit — rendered from the declarative config store.
+# Source revision: a1b2c3d4e5f6a7b8
+# DO NOT EDIT — regenerated on every apply; hand edits are out of model.
+# Claims the device bound to logical interface lan0 (match "enp2s0") so no
+# later .link unit can rename it out from under the rendered .network
+# file. Directives replicate Debian's default naming policy; AxonWall
+# adds no renaming of its own.
+[Match]
+OriginalName=enp2s0
+
+[Link]
+NamePolicy=kernel database onboard slot path
+AlternativeNamesPolicy=database onboard slot path
+MACAddressPolicy=persistent
+===== 10-axonwall-lan0.network =====
+# AxonWall managed systemd-networkd unit — rendered from the declarative config store.
+# Source revision: a1b2c3d4e5f6a7b8
+# DO NOT EDIT — regenerated on every apply; hand edits are out of model.
+[Match]
+Name=enp2s0
+
+[Network]
+Address=192.168.1.1/24
+IPForward=ipv4
+===== 10-axonwall-wan0.link =====
+# AxonWall managed .link unit — rendered from the declarative config store.
+# Source revision: a1b2c3d4e5f6a7b8
+# DO NOT EDIT — regenerated on every apply; hand edits are out of model.
+# Claims the device bound to logical interface wan0 (match "enp1s0") so no
+# later .link unit can rename it out from under the rendered .network
+# file. Directives replicate Debian's default naming policy; AxonWall
+# adds no renaming of its own.
+[Match]
+OriginalName=enp1s0
+
+[Link]
+NamePolicy=kernel database onboard slot path
+AlternativeNamesPolicy=database onboard slot path
+MACAddressPolicy=persistent
+===== 10-axonwall-wan0.network =====
+# AxonWall managed systemd-networkd unit — rendered from the declarative config store.
+# Source revision: a1b2c3d4e5f6a7b8
+# DO NOT EDIT — regenerated on every apply; hand edits are out of model.
+[Match]
+Name=enp1s0
+
+[Network]
+DHCP=yes
+IPForward=ipv4
+===== 10-axonwall-wg0.network =====
+# AxonWall managed systemd-networkd unit — rendered from the declarative config store.
+# Source revision: a1b2c3d4e5f6a7b8
+# DO NOT EDIT — regenerated on every apply; hand edits are out of model.
+
+# wg0 is created by the wireguard service (services.wireguard); this unit
+# only enables per-interface forwarding on the tunnel. The private key
+# lives in /etc/wireguard/wg0.key — never here.
+[Match]
+Name=wg0
+
+[Network]
+IPForward=ipv4

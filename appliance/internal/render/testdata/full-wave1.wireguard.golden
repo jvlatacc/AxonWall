@@ -1,0 +1,14 @@
+# AxonWall managed WireGuard configuration (wg0) — rendered from the declarative config store.
+# Source revision: a1b2c3d4e5f6a7b8
+# DO NOT EDIT — regenerated on every apply; hand edits are out of model.
+
+# Applied with `wg syncconf wg0` by the service reloader; the private
+# key is joined from /etc/wireguard/wg0.key into a /run copy at sync
+# time — never rendered here (the store holds public keys only).
+[Interface]
+ListenPort = 51820
+
+# peer: laptop
+[Peer]
+PublicKey = QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=
+AllowedIPs = 10.10.0.2/32

@@ -1,0 +1,9 @@
+version: 1
+zones:
+  wan: { interfaces: [wan0] }
+  lan: { interfaces: [lan0] }
+interfaces:
+  - { name: wan0, match: enp1s0, addressing: dhcp }
+  - { name: lan0, match: enp2s0, address: [192.168.1.1/24] }
+firewall:
+  default: { input: drop, forward: drop, output: accept }
